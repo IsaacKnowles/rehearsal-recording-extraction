@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 
 import numpy as np
@@ -443,8 +444,7 @@ def generate_html(output_dir: str, metadata: dict) -> str:
 
     Returns the absolute path to the written file.
     """
-    import json as _json
-    data_json = _json.dumps(metadata, separators=(",", ":"))
+    data_json = json.dumps(metadata, separators=(",", ":"))
     html = _HTML_TEMPLATE.replace("__REHEARSAL_DATA__", data_json, 1)
     out_path = os.path.join(output_dir, "index.html")
     with open(out_path, "w", encoding="utf-8") as fh:
@@ -577,7 +577,7 @@ def downsample_rms(
     # Zero-pad if shorter than requested
     if len(arr) < n_points:
         arr = np.pad(arr, (0, n_points - len(arr)))
-    if normalize:
+    if normalize and len(arr) > 0:
         peak = arr.max()
         if peak > 0:
             arr = arr / peak
