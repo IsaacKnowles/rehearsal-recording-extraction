@@ -37,6 +37,53 @@ def compute_rms(samples: np.ndarray, rate: int, window_sec: float = 1.0) -> np.n
     return rms
 
 
+def find_songs(
+    rms: np.ndarray,
+    min_song_windows: int,
+    merge_gap_windows: int,
+    threshold: float,
+) -> list[tuple[int, int]]:
+    """Detect song segments from an RMS array.
+
+    Args:
+        rms: per-window RMS values
+        min_song_windows: discard segments shorter than this many windows
+        merge_gap_windows: merge consecutive segments whose gap is <= this
+        threshold: RMS value above which a window counts as 'loud'
+
+    Returns:
+        List of (start_window, end_window) tuples (end is exclusive).
+    """
+    loud = rms >= threshold
+
+    # Collect contiguous loud runs
+    segments: list[list[int]] = []
+    in_seg = False
+    for i, is_loud in enumerate(loud):
+        if is_loud and not in_seg:
+            segments.append([i, i + 1])
+            in_seg = True
+        elif is_loud and in_seg:
+            segments[-1][1] = i + 1
+        else:
+            in_seg = False
+
+    # Merge segments whose gap is small enough
+    merged: list[list[int]] = []
+    for seg in segments:
+        if merged and seg[0] - merged[-1][1] <= merge_gap_windows:
+            merged[-1][1] = seg[1]
+        else:
+            merged.append(list(seg))
+
+    # Filter by minimum duration
+    return [
+        (s[0], s[1])
+        for s in merged
+        if s[1] - s[0] >= min_song_windows
+    ]
+
+
 def parse_args():
     p = argparse.ArgumentParser(
         description="Split rehearsal WAV into songs by volume detection"

@@ -4,7 +4,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, ".")
-from split_songs import compute_rms
+from split_songs import compute_rms, find_songs
 
 
 def test_compute_rms_silent():
@@ -38,8 +38,50 @@ def test_compute_rms_mixed():
     assert rms[2] < 1e-10, f"Third window should be silent, got {rms[2]}"
 
 
+def test_find_songs_basic():
+    """Three loud blocks separated by silence -> three songs."""
+    rms = np.array(
+        [0.5] * 10 + [0.001] * 5 + [0.5] * 10 + [0.001] * 5 + [0.5] * 10 + [0.001] * 20,
+        dtype=np.float64,
+    )
+    songs = find_songs(rms, min_song_windows=5, merge_gap_windows=2, threshold=0.1)
+    assert len(songs) == 3, f"Expected 3 songs, got {len(songs)}: {songs}"
+    assert songs[0] == (0, 10)
+    assert songs[1] == (15, 25)
+    assert songs[2] == (30, 40)
+
+
+def test_find_songs_merges_gap():
+    """Two loud blocks with small gap -> merged into one song."""
+    rms = np.array(
+        [0.5] * 10 + [0.001] * 3 + [0.5] * 10 + [0.001] * 20,
+        dtype=np.float64,
+    )
+    songs = find_songs(rms, min_song_windows=5, merge_gap_windows=5, threshold=0.1)
+    assert len(songs) == 1, f"Expected 1 merged song, got {len(songs)}: {songs}"
+    assert songs[0] == (0, 23)
+
+
+def test_find_songs_filters_short():
+    """Loud block shorter than min_song_windows is discarded."""
+    rms = np.array(
+        [0.5] * 2 + [0.001] * 5 + [0.5] * 10 + [0.001] * 20,
+        dtype=np.float64,
+    )
+    songs = find_songs(rms, min_song_windows=5, merge_gap_windows=2, threshold=0.1)
+    assert len(songs) == 1, f"Expected 1 song (short one filtered), got {len(songs)}"
+    assert songs[0] == (7, 17)
+
+
 if __name__ == "__main__":
-    tests = [test_compute_rms_silent, test_compute_rms_loud, test_compute_rms_mixed]
+    tests = [
+        test_compute_rms_silent,
+        test_compute_rms_loud,
+        test_compute_rms_mixed,
+        test_find_songs_basic,
+        test_find_songs_merges_gap,
+        test_find_songs_filters_short,
+    ]
     for t in tests:
         try:
             t()
