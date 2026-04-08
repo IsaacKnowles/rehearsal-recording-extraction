@@ -1,10 +1,29 @@
 #!/usr/bin/env python3
 """Tests for split_songs.py"""
 import sys
+import os
 import numpy as np
 
 sys.path.insert(0, ".")
-from split_songs import compute_rms, find_songs
+from split_songs import compute_rms, find_songs, downsample_rms
+
+try:
+    import pytest
+except ImportError:
+    # Fallback if pytest not available
+    class Approx:
+        def __init__(self, val, abs_tol):
+            self.val = val
+            self.abs_tol = abs_tol if abs_tol is not None else 1e-6
+        def __eq__(self, other):
+            return abs(other - self.val) <= self.abs_tol
+        def __repr__(self):
+            return f"{self.val} +/- {self.abs_tol}"
+
+    class pytest:
+        @staticmethod
+        def approx(value, abs=None):
+            return Approx(value, abs)
 
 
 def test_compute_rms_silent():
@@ -73,6 +92,33 @@ def test_find_songs_filters_short():
     assert songs[0] == (7, 17)
 
 
+def test_downsample_rms_reduces_length():
+    rms = np.ones(1000, dtype=np.float64) * 0.5
+    result = downsample_rms(rms, 100, normalize=False)
+    assert len(result) == 100
+    assert all(abs(v - 0.5) < 0.001 for v in result)
+
+
+def test_downsample_rms_normalizes_to_one():
+    rms = np.array([0.0, 0.25, 0.5, 1.0], dtype=np.float64)
+    result = downsample_rms(rms, 4, normalize=True)
+    assert len(result) == 4
+    assert max(result) == pytest.approx(1.0, abs=0.001)
+
+
+def test_downsample_rms_short_input_pads():
+    rms = np.array([0.1, 0.2, 0.3], dtype=np.float64)
+    result = downsample_rms(rms, 10, normalize=False)
+    assert len(result) == 10
+
+
+def test_downsample_rms_silent_signal():
+    rms = np.zeros(500, dtype=np.float64)
+    result = downsample_rms(rms, 50, normalize=True)
+    assert len(result) == 50
+    assert all(v == 0.0 for v in result)
+
+
 if __name__ == "__main__":
     tests = [
         test_compute_rms_silent,
@@ -81,6 +127,10 @@ if __name__ == "__main__":
         test_find_songs_basic,
         test_find_songs_merges_gap,
         test_find_songs_filters_short,
+        test_downsample_rms_reduces_length,
+        test_downsample_rms_normalizes_to_one,
+        test_downsample_rms_short_input_pads,
+        test_downsample_rms_silent_signal,
     ]
     for t in tests:
         try:

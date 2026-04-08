@@ -125,6 +125,29 @@ def rms_to_db(rms: np.ndarray) -> np.ndarray:
         return 20.0 * np.log10(np.maximum(rms, 1e-12))
 
 
+def downsample_rms(
+    rms: np.ndarray, n_points: int, normalize: bool = True
+) -> list[float]:
+    """Downsample a 1-D RMS array to n_points and optionally normalise to 0–1.
+
+    Uses block-mean downsampling. Output is always exactly n_points long
+    (zero-padded if the input is shorter).
+    """
+    arr = rms.astype(np.float64)
+    if len(arr) >= n_points:
+        # Trim to a multiple of n_points, reshape, take column means
+        trimmed = arr[: n_points * (len(arr) // n_points)]
+        arr = trimmed.reshape(n_points, -1).mean(axis=1)
+    # Zero-pad if shorter than requested
+    if len(arr) < n_points:
+        arr = np.pad(arr, (0, n_points - len(arr)))
+    if normalize:
+        peak = arr.max()
+        if peak > 0:
+            arr = arr / peak
+    return [round(float(v), 4) for v in arr[:n_points]]
+
+
 def main(args: argparse.Namespace) -> None:
     # --- Load ---
     print(f"Reading {args.input} ...")
