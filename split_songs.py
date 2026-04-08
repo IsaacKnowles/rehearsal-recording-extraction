@@ -16,6 +16,12 @@ import numpy as np
 import soundfile as sf
 
 
+COLORS: list[str] = [
+    "#4a9eff", "#5abb6a", "#e07840", "#b06adb", "#e0c040",
+    "#40b8c8", "#e05070", "#70c870", "#c06030", "#8080e0", "#40c8a0",
+]
+
+
 def compute_rms(samples: np.ndarray, rate: int, window_sec: float = 1.0) -> np.ndarray:
     """Compute per-window RMS amplitude.
 
@@ -146,6 +152,52 @@ def downsample_rms(
         if peak > 0:
             arr = arr / peak
     return [round(float(v), 4) for v in arr[:n_points]]
+
+
+def build_metadata(
+    input_path: str,
+    rate: int,
+    channels: int,
+    rms: np.ndarray,
+    window_sec: float,
+    songs: list[tuple[int, int]],
+) -> dict:
+    """Build the JSON payload embedded in the HTML review UI.
+
+    Args:
+        input_path: path to the original WAV file (basename used in output)
+        rate: sample rate in Hz
+        channels: number of audio channels
+        rms: full per-window RMS array from compute_rms()
+        window_sec: window size in seconds used during analysis
+        songs: list of (start_window, end_window) tuples from find_songs()
+
+    Returns:
+        Dict matching the schema consumed by the HTML template.
+    """
+    total_sec = len(rms) * window_sec
+    duration_min = total_sec / 60.0
+
+    song_list = []
+    for i, (w_start, w_end) in enumerate(songs):
+        song_rms = rms[w_start:w_end]
+        song_list.append({
+            "file": f"song_{i + 1:02d}.wav",
+            "name": f"Song {i + 1:02d}",
+            "start_min": round(w_start * window_sec / 60.0, 4),
+            "dur_min": round((w_end - w_start) * window_sec / 60.0, 4),
+            "color": COLORS[i % len(COLORS)],
+            "waveform": downsample_rms(song_rms, 600, normalize=True),
+        })
+
+    return {
+        "filename": os.path.basename(input_path),
+        "duration_min": round(duration_min, 2),
+        "sample_rate": rate,
+        "channels": channels,
+        "overview_rms": downsample_rms(rms, 2000, normalize=True),
+        "songs": song_list,
+    }
 
 
 def main(args: argparse.Namespace) -> None:

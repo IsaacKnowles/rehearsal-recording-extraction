@@ -5,7 +5,7 @@ import os
 import numpy as np
 
 sys.path.insert(0, ".")
-from split_songs import compute_rms, find_songs, downsample_rms
+from split_songs import compute_rms, find_songs, downsample_rms, build_metadata, COLORS
 
 import pytest
 
@@ -101,6 +101,38 @@ def test_downsample_rms_silent_signal():
     result = downsample_rms(rms, 50, normalize=True)
     assert len(result) == 50
     assert all(v == 0.0 for v in result)
+
+
+def test_build_metadata_top_level_keys():
+    rms = np.array([0.01] * 60 + [0.8] * 120 + [0.01] * 60, dtype=np.float64)
+    meta = build_metadata("raw/test.wav", 48000, 2, rms, 1.0, [(60, 180)])
+    assert meta["filename"] == "test.wav"
+    assert meta["sample_rate"] == 48000
+    assert meta["channels"] == 2
+    assert meta["duration_min"] == pytest.approx(4.0, abs=0.1)
+    assert len(meta["overview_rms"]) == 2000
+    assert len(meta["songs"]) == 1
+
+
+def test_build_metadata_song_fields():
+    rms = np.array([0.01] * 60 + [0.8] * 120 + [0.01] * 60, dtype=np.float64)
+    meta = build_metadata("raw/test.wav", 48000, 2, rms, 1.0, [(60, 180)])
+    s = meta["songs"][0]
+    assert s["file"] == "song_01.wav"
+    assert s["name"] == "Song 01"
+    assert s["color"] == COLORS[0]
+    assert s["start_min"] == pytest.approx(1.0, abs=0.01)
+    assert s["dur_min"] == pytest.approx(2.0, abs=0.01)
+    assert len(s["waveform"]) == 600
+    assert max(s["waveform"]) == pytest.approx(1.0, abs=0.01)
+
+
+def test_build_metadata_color_cycles():
+    n_songs = 12
+    rms = np.ones(n_songs * 300, dtype=np.float64) * 0.5
+    songs = [(i * 300, (i + 1) * 300) for i in range(n_songs)]
+    meta = build_metadata("x.wav", 48000, 2, rms, 1.0, songs)
+    assert meta["songs"][11]["color"] == COLORS[11 % len(COLORS)]
 
 
 if __name__ == "__main__":
