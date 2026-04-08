@@ -17,6 +17,26 @@ import numpy as np
 import soundfile as sf
 
 
+def compute_rms(samples: np.ndarray, rate: int, window_sec: float = 1.0) -> np.ndarray:
+    """Compute per-window RMS amplitude.
+
+    Args:
+        samples: shape (n_frames, n_channels), float32 or float64
+        rate: sample rate in Hz
+        window_sec: window size in seconds
+
+    Returns:
+        1-D array of RMS values, one per complete window
+    """
+    window_frames = int(rate * window_sec)
+    mono = samples.mean(axis=1)  # mix to mono for analysis
+    n_windows = len(mono) // window_frames
+    # Reshape into (n_windows, window_frames) for fast vectorised RMS
+    trimmed = mono[: n_windows * window_frames].reshape(n_windows, window_frames)
+    rms = np.sqrt(np.mean(trimmed.astype(np.float64) ** 2, axis=1))
+    return rms
+
+
 def parse_args():
     p = argparse.ArgumentParser(
         description="Split rehearsal WAV into songs by volume detection"
