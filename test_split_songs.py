@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Tests for split_songs.py"""
+import json
 import sys
 import os
+import tempfile
 import numpy as np
 
 sys.path.insert(0, ".")
-from split_songs import compute_rms, find_songs, downsample_rms, build_metadata, COLORS
+from split_songs import compute_rms, find_songs, downsample_rms, build_metadata, COLORS, generate_html
 
 import pytest
 
@@ -135,11 +137,6 @@ def test_build_metadata_color_cycles():
     assert meta["songs"][11]["color"] == COLORS[11 % len(COLORS)]
 
 
-import json
-import tempfile
-from split_songs import generate_html
-
-
 def test_generate_html_creates_file_with_embedded_data():
     rms = np.array([0.01] * 60 + [0.8] * 120 + [0.01] * 60, dtype=np.float64)
     meta = build_metadata("raw/test.wav", 48000, 2, rms, 1.0, [(60, 180)])
@@ -147,7 +144,8 @@ def test_generate_html_creates_file_with_embedded_data():
     with tempfile.TemporaryDirectory() as tmpdir:
         path = generate_html(tmpdir, meta)
         assert os.path.exists(path), "index.html was not created"
-        content = open(path, encoding="utf-8").read()
+        with open(path, encoding="utf-8") as f:
+            content = f.read()
         assert "<!DOCTYPE html>" in content
         marker = "window.REHEARSAL_DATA = "
         assert marker in content
@@ -170,6 +168,10 @@ if __name__ == "__main__":
         test_downsample_rms_normalizes_to_one,
         test_downsample_rms_short_input_pads,
         test_downsample_rms_silent_signal,
+        test_build_metadata_top_level_keys,
+        test_build_metadata_song_fields,
+        test_build_metadata_color_cycles,
+        test_generate_html_creates_file_with_embedded_data,
     ]
     for t in tests:
         try:

@@ -445,7 +445,7 @@ def generate_html(output_dir: str, metadata: dict) -> str:
     """
     import json as _json
     data_json = _json.dumps(metadata, separators=(",", ":"))
-    html = _HTML_TEMPLATE.replace("__REHEARSAL_DATA__", data_json)
+    html = _HTML_TEMPLATE.replace("__REHEARSAL_DATA__", data_json, 1)
     out_path = os.path.join(output_dir, "index.html")
     with open(out_path, "w", encoding="utf-8") as fh:
         fh.write(html)
