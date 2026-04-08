@@ -135,6 +135,29 @@ def test_build_metadata_color_cycles():
     assert meta["songs"][11]["color"] == COLORS[11 % len(COLORS)]
 
 
+import json
+import tempfile
+from split_songs import generate_html
+
+
+def test_generate_html_creates_file_with_embedded_data():
+    rms = np.array([0.01] * 60 + [0.8] * 120 + [0.01] * 60, dtype=np.float64)
+    meta = build_metadata("raw/test.wav", 48000, 2, rms, 1.0, [(60, 180)])
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = generate_html(tmpdir, meta)
+        assert os.path.exists(path), "index.html was not created"
+        content = open(path, encoding="utf-8").read()
+        assert "<!DOCTYPE html>" in content
+        marker = "window.REHEARSAL_DATA = "
+        assert marker in content
+        json_str = content.split(marker)[1].split(";\n")[0]
+        parsed = json.loads(json_str)
+        assert parsed["filename"] == "test.wav"
+        assert len(parsed["songs"]) == 1
+        assert parsed["songs"][0]["file"] == "song_01.wav"
+
+
 if __name__ == "__main__":
     tests = [
         test_compute_rms_silent,
