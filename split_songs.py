@@ -120,7 +120,80 @@ def parse_args():
     return p.parse_args()
 
 
+def rms_to_db(rms: np.ndarray) -> np.ndarray:
+    """Convert linear RMS to dBFS. Returns -inf for silence."""
+    with np.errstate(divide="ignore"):
+        return 20.0 * np.log10(np.maximum(rms, 1e-12))
+
+
+def main(args) -> None:
+    # --- Load ---
+    print(f"Reading {args.input} ...")
+    info = sf.info(args.input)
+    print(
+        f"  {info.frames / info.samplerate / 60:.1f} min  |  "
+        f"{info.samplerate} Hz  {info.channels}ch  {info.format}"
+    )
+    samples, rate = sf.read(args.input, dtype="float32", always_2d=True)
+
+    # --- Analyse ---
+    window_sec = args.window_seconds
+    rms = compute_rms(samples, rate, window_sec)
+    db = rms_to_db(rms)
+
+    threshold_linear = 10 ** (args.threshold_db / 20.0)
+    min_song_windows = int((args.min_song_minutes * 60) / window_sec)
+    merge_gap_windows = int(args.merge_gap_seconds / window_sec)
+
+    print(
+        f"\nThreshold: {args.threshold_db} dBFS  |  "
+        f"Min song: {args.min_song_minutes} min  |  "
+        f"Merge gap: {args.merge_gap_seconds} s"
+    )
+    print(f"Recording loudness range: {db.min():.1f} to {db.max():.1f} dBFS\n")
+
+    songs = find_songs(rms, min_song_windows, merge_gap_windows, threshold_linear)
+
+    if not songs:
+        print("No songs detected. Try lowering --threshold-db.")
+        return
+
+    print(f"Detected {len(songs)} song(s):")
+    pad_frames = int(args.pad_seconds * rate)
+
+    for i, (w_start, w_end) in enumerate(songs, 1):
+        f_start = int(w_start * window_sec * rate)
+        f_end = int(w_end * window_sec * rate)
+        duration_sec = (f_end - f_start) / rate
+        start_min = f_start / rate / 60
+        peak_db = db[w_start:w_end].max()
+        print(
+            f"  Song {i:02d}: {start_min:5.1f} min  "
+            f"duration {duration_sec/60:.1f} min  "
+            f"peak {peak_db:.1f} dBFS"
+        )
+
+    if args.preview:
+        print("\n(--preview: no files written)")
+        return
+
+    # --- Export ---
+    stem = os.path.splitext(os.path.basename(args.input))[0]
+    output_dir = args.output_dir or f"{stem}_songs"
+    os.makedirs(output_dir, exist_ok=True)
+
+    for i, (w_start, w_end) in enumerate(songs, 1):
+        f_start = max(0, int(w_start * window_sec * rate) - pad_frames)
+        f_end = min(len(samples), int(w_end * window_sec * rate) + pad_frames)
+        chunk = samples[f_start:f_end]
+
+        out_path = os.path.join(output_dir, f"song_{i:02d}.wav")
+        sf.write(out_path, chunk, rate, subtype="FLOAT")
+        duration_sec = len(chunk) / rate
+        print(f"  -> {out_path}  ({duration_sec/60:.1f} min)")
+
+    print(f"\nDone. {len(songs)} files written to {output_dir}/")
+
+
 if __name__ == "__main__":
-    args = parse_args()
-    print(f"Input: {args.input}")
-    print("(scaffold only — no logic yet)")
+    main(parse_args())
