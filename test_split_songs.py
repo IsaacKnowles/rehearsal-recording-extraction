@@ -7,23 +7,7 @@ import numpy as np
 sys.path.insert(0, ".")
 from split_songs import compute_rms, find_songs, downsample_rms
 
-try:
-    import pytest
-except ImportError:
-    # Fallback if pytest not available
-    class Approx:
-        def __init__(self, val, abs_tol):
-            self.val = val
-            self.abs_tol = abs_tol if abs_tol is not None else 1e-6
-        def __eq__(self, other):
-            return abs(other - self.val) <= self.abs_tol
-        def __repr__(self):
-            return f"{self.val} +/- {self.abs_tol}"
-
-    class pytest:
-        @staticmethod
-        def approx(value, abs=None):
-            return Approx(value, abs)
+import pytest
 
 
 def test_compute_rms_silent():
