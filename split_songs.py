@@ -699,6 +699,17 @@ def main(args: argparse.Namespace) -> None:
         duration_sec = len(chunk) / rate
         print(f"  -> {out_path}  ({duration_sec/60:.1f} min)")
 
+    metadata = build_metadata(
+        input_path=args.input,
+        rate=rate,
+        channels=info.channels,
+        rms=rms,
+        window_sec=window_sec,
+        songs=songs,
+    )
+    html_path = generate_html(output_dir, metadata)
+    print(f"  -> {html_path}  (review UI)")
+
     print(f"\nDone. {len(songs)} files written to {output_dir}/")
 
 
