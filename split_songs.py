@@ -11,7 +11,6 @@ Usage:
 
 import argparse
 import os
-import sys
 
 import numpy as np
 import soundfile as sf
@@ -121,12 +120,12 @@ def parse_args():
 
 
 def rms_to_db(rms: np.ndarray) -> np.ndarray:
-    """Convert linear RMS to dBFS. Returns -inf for silence."""
+    """Convert linear RMS to dBFS. Returns ~-240 dBFS for silence (clamped at 1e-12)."""
     with np.errstate(divide="ignore"):
         return 20.0 * np.log10(np.maximum(rms, 1e-12))
 
 
-def main(args) -> None:
+def main(args: argparse.Namespace) -> None:
     # --- Load ---
     print(f"Reading {args.input} ...")
     info = sf.info(args.input)
@@ -161,9 +160,12 @@ def main(args) -> None:
     print(f"Detected {len(songs)} song(s):")
     pad_frames = int(args.pad_seconds * rate)
 
+    def to_frames(w: int) -> int:
+        return int(w * window_sec * rate)
+
     for i, (w_start, w_end) in enumerate(songs, 1):
-        f_start = int(w_start * window_sec * rate)
-        f_end = int(w_end * window_sec * rate)
+        f_start = to_frames(w_start)
+        f_end = to_frames(w_end)
         duration_sec = (f_end - f_start) / rate
         start_min = f_start / rate / 60
         peak_db = db[w_start:w_end].max()
@@ -183,8 +185,8 @@ def main(args) -> None:
     os.makedirs(output_dir, exist_ok=True)
 
     for i, (w_start, w_end) in enumerate(songs, 1):
-        f_start = max(0, int(w_start * window_sec * rate) - pad_frames)
-        f_end = min(len(samples), int(w_end * window_sec * rate) + pad_frames)
+        f_start = max(0, to_frames(w_start) - pad_frames)
+        f_end = min(len(samples), to_frames(w_end) + pad_frames)
         chunk = samples[f_start:f_end]
 
         out_path = os.path.join(output_dir, f"song_{i:02d}.wav")
