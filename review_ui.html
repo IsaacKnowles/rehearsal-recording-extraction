@@ -113,7 +113,7 @@ canvas{display:block}
   <div id="cardsContainer"></div>
 </div>
 
-<audio id="mainAudio" src="/audio" preload="auto"></audio>
+<audio id="mainAudio" src="/audio" preload="metadata"></audio>
 
 <script>
 // ── State ────────────────────────────────────────────────────
@@ -300,7 +300,7 @@ function buildCard(seg) {
   card.innerHTML = `
     <div class="card-header">
       <div class="song-num" style="background:${seg.color}22;color:${seg.color}">${S.segments.indexOf(seg)+1}</div>
-      <input class="song-name" id="name${seg.id}" value="${seg.name}" />
+      <input class="song-name" id="name${seg.id}" value="" />
       <button class="btn-export${seg.exported?' exported':''}" id="export${seg.id}">${exportLabel}</button>
       <button class="btn-del" id="del${seg.id}">✕</button>
     </div>
@@ -362,6 +362,7 @@ function buildCard(seg) {
       </div>
     </div>`;
 
+  card.querySelector(`#name${seg.id}`).value = seg.name;
   document.getElementById('cardsContainer').appendChild(card);
 
   // Focus on click
@@ -413,12 +414,18 @@ function buildCard(seg) {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({segment_id: seg.id, start_min: seg.start_min, end_min: seg.end_min}),
-    }).then(r => r.json()).then(() => {
+    }).then(r => {
+      if (!r.ok) throw new Error(`Export failed: ${r.status}`);
+      return r.json();
+    }).then(() => {
       seg.exported = true;
       const btn = document.getElementById(`export${seg.id}`);
       btn.textContent = '✓ Exported';
       btn.classList.add('exported');
       drawOverview();
+    }).catch(err => {
+      console.error('Export error:', err);
+      alert('Export failed. See console for details.');
     });
   });
 
