@@ -97,7 +97,8 @@ def export_segment(filename: str):
     end_frame = min(len(samples), int(end_min * 60 * rate))
     chunk = samples[start_frame:end_frame]
 
-    out_path = os.path.join(OUTPUT_DIR, filename)
+    safe_name = os.path.basename(filename)
+    out_path = os.path.join(OUTPUT_DIR, safe_name)
     sf.write(out_path, chunk, rate, subtype="FLOAT")
 
     # Mark segment as exported in segments.json

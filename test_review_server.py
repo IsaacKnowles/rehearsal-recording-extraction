@@ -101,7 +101,6 @@ def test_export_writes_wav_and_marks_exported(client, server_env):
     assert saved["segments"][0]["exported"] is True
 
     # Verify it's a valid WAV
-    import soundfile as sf
     data, rate = sf.read(result["path"])
     assert rate == 48000
     assert len(data) > 0
