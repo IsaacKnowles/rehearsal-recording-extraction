@@ -158,7 +158,7 @@ function saveState() {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(S),
-    });
+    }).catch(err => console.error('Save failed:', err));
   }, 200);
 }
 
