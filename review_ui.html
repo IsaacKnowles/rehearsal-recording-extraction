@@ -640,7 +640,7 @@ function addSegment(startMin, endMin) {
     name: `Song ${String(nextId).padStart(2,'0')}`,
     start_min: Math.round(startMin * 3600) / 3600,
     end_min: Math.round(endMin * 3600) / 3600,
-    color: ['#4a9eff','#5abb6a','#e07840','#b06adb','#e0c040','#40b8c8','#e05070'][S.segments.length % 7],
+    color: ['#4a9eff','#5abb6a','#e07840','#b06adb','#e0c040','#40b8c8','#e05070','#70c870','#c06030','#8080e0','#40c8a0'][S.segments.length % 11],
     exported: false,
   };
   S.segments.push(seg);

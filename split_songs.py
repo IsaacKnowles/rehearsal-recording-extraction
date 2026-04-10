@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Split a live rehearsal WAV recording into individual songs.
+"""Detect songs in a rehearsal WAV and launch the interactive review server.
 
-Detects songs as loud contiguous segments separated by quiet breaks.
-Writes one WAV file per detected song into an output directory.
+Analyses the recording for loud segments, writes segments.json, then starts
+a local Flask server for editing and exporting individual songs.
 
 Usage:
     python3 split_songs.py raw/recording.WAV
     python3 split_songs.py raw/recording.WAV -o songs/ --preview
+    python3 split_songs.py raw/recording.WAV --reset
 """
 
 import argparse
@@ -21,6 +22,8 @@ COLORS: list[str] = [
     "#4a9eff", "#5abb6a", "#e07840", "#b06adb", "#e0c040",
     "#40b8c8", "#e05070", "#70c870", "#c06030", "#8080e0", "#40c8a0",
 ]
+
+
 def compute_rms(samples: np.ndarray, rate: int, window_sec: float = 1.0) -> np.ndarray:
     """Compute per-window RMS amplitude.
 
