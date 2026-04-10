@@ -3,7 +3,6 @@
 import json
 import os
 import sys
-import tempfile
 
 import numpy as np
 import pytest
@@ -81,6 +80,5 @@ def test_audio_full_request_returns_200(client):
 def test_audio_range_request_returns_206(client):
     resp = client.get("/audio", headers={"Range": "bytes=0-1023"})
     assert resp.status_code == 206
-    assert b"Content-Range" in resp.headers.get("Content-Range", "").encode() or \
-           resp.headers.get("Content-Range", "").startswith("bytes 0-1023/")
+    assert resp.headers.get("Content-Range", "").startswith("bytes 0-1023/")
     assert len(resp.data) == 1024
