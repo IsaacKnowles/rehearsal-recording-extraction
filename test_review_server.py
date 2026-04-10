@@ -82,3 +82,26 @@ def test_audio_range_request_returns_206(client):
     assert resp.status_code == 206
     assert resp.headers.get("Content-Range", "").startswith("bytes 0-1023/")
     assert len(resp.data) == 1024
+
+
+def test_export_writes_wav_and_marks_exported(client, server_env):
+    resp = client.post(
+        "/export/song_01.wav",
+        data=json.dumps({"segment_id": 0, "start_min": 0.0, "end_min": 5 / 60}),
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert os.path.exists(result["path"])
+
+    # Verify exported flag was saved
+    json_path = os.path.join(server_env["output_dir"], "segments.json")
+    with open(json_path) as f:
+        saved = json.load(f)
+    assert saved["segments"][0]["exported"] is True
+
+    # Verify it's a valid WAV
+    import soundfile as sf
+    data, rate = sf.read(result["path"])
+    assert rate == 48000
+    assert len(data) > 0

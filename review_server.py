@@ -11,6 +11,7 @@ import json
 import os
 import sys
 
+import soundfile as sf
 from flask import Flask, Response, jsonify, request, send_file
 
 app = Flask(__name__)
@@ -77,6 +78,39 @@ def audio():
             "Content-Length": str(length),
         },
     )
+
+
+@app.route("/export/<filename>", methods=["POST"])
+def export_segment(filename: str):
+    """Export one segment as a WAV file.
+
+    Body: {"segment_id": int, "start_min": float, "end_min": float}
+    Returns: {"path": str}
+    """
+    body = request.get_json(force=True)
+    start_min = float(body["start_min"])
+    end_min = float(body["end_min"])
+    segment_id = int(body["segment_id"])
+
+    samples, rate = sf.read(SOURCE_WAV, dtype="float32", always_2d=True)
+    start_frame = int(start_min * 60 * rate)
+    end_frame = min(len(samples), int(end_min * 60 * rate))
+    chunk = samples[start_frame:end_frame]
+
+    out_path = os.path.join(OUTPUT_DIR, filename)
+    sf.write(out_path, chunk, rate, subtype="FLOAT")
+
+    # Mark segment as exported in segments.json
+    with open(_segments_path(), encoding="utf-8") as f:
+        state = json.load(f)
+    for seg in state["segments"]:
+        if seg["id"] == segment_id:
+            seg["exported"] = True
+            break
+    with open(_segments_path(), "w", encoding="utf-8") as f:
+        json.dump(state, f, separators=(",", ":"))
+
+    return jsonify({"path": out_path})
 
 
 def run(output_dir: str, source_wav: str, port: int = 5123) -> None:
