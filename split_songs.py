@@ -275,8 +275,6 @@ def main(args: argparse.Namespace) -> None:
         window_sec=window_sec,
         songs=songs,
     )
-    html_path = generate_html(output_dir, metadata)
-    print(f"  -> {html_path}  (review UI)")
 
     print(f"\nDone. {len(songs)} files written to {output_dir}/")
 
