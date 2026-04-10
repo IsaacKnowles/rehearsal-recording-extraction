@@ -7,7 +7,7 @@ import tempfile
 import numpy as np
 
 sys.path.insert(0, ".")
-from split_songs import compute_rms, find_songs, downsample_rms, build_metadata, COLORS, generate_html
+from split_songs import compute_rms, find_songs, downsample_rms, build_metadata, COLORS
 
 import pytest
 
@@ -108,25 +108,26 @@ def test_downsample_rms_silent_signal():
 def test_build_metadata_top_level_keys():
     rms = np.array([0.01] * 60 + [0.8] * 120 + [0.01] * 60, dtype=np.float64)
     meta = build_metadata("raw/test.wav", 48000, 2, rms, 1.0, [(60, 180)])
-    assert meta["filename"] == "test.wav"
+    assert meta["source_file"] == "raw/test.wav"
     assert meta["sample_rate"] == 48000
     assert meta["channels"] == 2
     assert meta["duration_min"] == pytest.approx(4.0, abs=0.1)
     assert len(meta["overview_rms"]) == 2000
-    assert len(meta["songs"]) == 1
+    assert len(meta["segments"]) == 1
 
 
-def test_build_metadata_song_fields():
+def test_build_metadata_segment_fields():
     rms = np.array([0.01] * 60 + [0.8] * 120 + [0.01] * 60, dtype=np.float64)
     meta = build_metadata("raw/test.wav", 48000, 2, rms, 1.0, [(60, 180)])
-    s = meta["songs"][0]
-    assert s["file"] == "song_01.wav"
+    s = meta["segments"][0]
+    assert s["id"] == 0
     assert s["name"] == "Song 01"
     assert s["color"] == COLORS[0]
     assert s["start_min"] == pytest.approx(1.0, abs=0.01)
-    assert s["dur_min"] == pytest.approx(2.0, abs=0.01)
-    assert len(s["waveform"]) == 600
-    assert max(s["waveform"]) == pytest.approx(1.0, abs=0.01)
+    assert s["end_min"] == pytest.approx(3.0, abs=0.01)
+    assert s["exported"] is False
+    assert "waveform" not in s
+    assert "file" not in s
 
 
 def test_build_metadata_color_cycles():
@@ -134,26 +135,9 @@ def test_build_metadata_color_cycles():
     rms = np.ones(n_songs * 300, dtype=np.float64) * 0.5
     songs = [(i * 300, (i + 1) * 300) for i in range(n_songs)]
     meta = build_metadata("x.wav", 48000, 2, rms, 1.0, songs)
-    assert meta["songs"][11]["color"] == COLORS[11 % len(COLORS)]
+    assert meta["segments"][11]["color"] == COLORS[11 % len(COLORS)]
 
 
-def test_generate_html_creates_file_with_embedded_data():
-    rms = np.array([0.01] * 60 + [0.8] * 120 + [0.01] * 60, dtype=np.float64)
-    meta = build_metadata("raw/test.wav", 48000, 2, rms, 1.0, [(60, 180)])
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        path = generate_html(tmpdir, meta)
-        assert os.path.exists(path), "index.html was not created"
-        with open(path, encoding="utf-8") as f:
-            content = f.read()
-        assert "<!DOCTYPE html>" in content
-        marker = "window.REHEARSAL_DATA = "
-        assert marker in content
-        json_str = content.split(marker)[1].split(";\n")[0]
-        parsed = json.loads(json_str)
-        assert parsed["filename"] == "test.wav"
-        assert len(parsed["songs"]) == 1
-        assert parsed["songs"][0]["file"] == "song_01.wav"
 
 
 if __name__ == "__main__":
@@ -169,9 +153,8 @@ if __name__ == "__main__":
         test_downsample_rms_short_input_pads,
         test_downsample_rms_silent_signal,
         test_build_metadata_top_level_keys,
-        test_build_metadata_song_fields,
+        test_build_metadata_segment_fields,
         test_build_metadata_color_cycles,
-        test_generate_html_creates_file_with_embedded_data,
     ]
     for t in tests:
         try:
