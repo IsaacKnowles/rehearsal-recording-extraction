@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Rehearsal Review</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0f0f0f;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;user-select:none}
+canvas{display:block}
+/* ── header ── */
+.app-header{padding:14px 20px;background:#1a1a1a;border-bottom:1px solid #2a2a2a;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:10}
+.app-header h1{font-size:15px;font-weight:600;color:#fff}
+.app-header .meta{color:#555;font-size:12px}
+.badge{margin-left:auto;background:#1e3a1e;color:#6cbb6c;border:1px solid #2e5a2e;border-radius:4px;padding:2px 9px;font-size:11px;font-weight:600}
+/* ── overview ── */
+.overview-section{padding:14px 20px 12px;background:#121212;border-bottom:1px solid #1e1e1e}
+.section-label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#444;margin-bottom:6px}
+.overview-wrap{position:relative;height:68px;border-radius:4px;overflow:hidden;background:#080808;cursor:crosshair}
+#ovCanvas{width:100%;height:100%}
+#ovGhost{position:absolute;top:0;height:100%;background:#ffffff15;border-left:2px solid #fff4;border-right:2px solid #fff4;pointer-events:none;display:none}
+.overview-hint{margin-top:5px;font-size:10px;color:#383838}
+.overview-times{display:flex;justify-content:space-between;margin-top:3px;color:#383838;font-size:10px;font-variant-numeric:tabular-nums}
+/* ── songs section ── */
+.songs-section{padding:14px 20px 80px}
+.add-btn{display:inline-flex;align-items:center;gap:6px;background:#1a2a1a;border:1px dashed #2e5a2e;color:#5abb6a;border-radius:5px;padding:6px 14px;font-size:12px;cursor:pointer;margin-bottom:14px;transition:all .15s}
+.add-btn:hover{background:#1e3a1e}
+/* ── card ── */
+.song-card{background:#161616;border:1px solid #242424;border-radius:6px;margin-bottom:10px;overflow:visible;transition:border-color .15s}
+.song-card.focused{border-color:#4a9eff55}
+.card-header{display:flex;align-items:center;padding:9px 12px;gap:10px;border-bottom:1px solid #1e1e1e}
+.song-num{width:20px;height:20px;border-radius:3px;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.song-name{background:transparent;border:none;color:#ccc;font-size:13px;font-weight:500;flex:1;outline:none;font-family:inherit;user-select:text}
+.song-name:focus{background:#1e1e1e;border-radius:3px;padding:2px 5px;margin:-2px -5px}
+.btn-export{background:#1a3a1a;border:1px solid #2e6a2e;color:#5abb6a;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;white-space:nowrap;transition:all .12s}
+.btn-export:hover{background:#1e4a1e}
+.btn-export.exported{background:#111;border-color:#2a3a2a;color:#3a6a3a;cursor:pointer}
+.btn-del{width:24px;height:24px;background:none;border:1px solid #2a2a2a;border-radius:4px;color:#555;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0}
+.btn-del:hover{border-color:#7a3030;color:#e06060;background:#1e1010}
+.card-body{display:grid;grid-template-columns:1fr 1fr}
+/* ── context col ── */
+.context-col{border-right:1px solid #1e1e1e;padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.ctx-label{font-size:9px;text-transform:uppercase;letter-spacing:.07em;color:#383838}
+.ctx-outer{position:relative}
+.ctx-wrap{height:56px;background:#080808;border-radius:3px;overflow:hidden;position:relative}
+.ctx-canvas{width:100%;height:100%}
+.seg-region{position:absolute;top:0;bottom:0;pointer-events:none}
+.seg-fill{position:absolute;inset:0;border-radius:1px}
+.seg-border{position:absolute;inset:0;border-radius:1px;border:1.5px solid transparent}
+.seg-body{position:absolute;top:0;bottom:0;left:10px;right:10px;cursor:grab;pointer-events:all}
+.seg-body:active{cursor:grabbing}
+.handle{position:absolute;top:0;height:56px;width:18px;cursor:ew-resize;display:flex;align-items:center;justify-content:center;z-index:20}
+.handle-bar{width:3px;height:22px;border-radius:2px}
+.handle.left{transform:translateX(-9px)}
+.handle.right{transform:translateX(-9px)}
+/* ── time fields ── */
+.time-row{display:flex;align-items:center;gap:8px}
+.time-row label{font-size:9px;color:#444;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap;width:28px}
+.time-sep{color:#333;font-size:11px}
+.time-field{display:flex;align-items:center;border:1px solid #2a2a2a;border-radius:4px;overflow:hidden;background:#0e0e0e}
+.time-field:focus-within{border-color:#4a9eff55}
+.time-input{background:transparent;border:none;color:#aaa;font-size:11px;font-family:monospace;width:46px;padding:3px 4px;text-align:center;outline:none;user-select:text}
+.time-input:focus{color:#ccc}
+.steppers{display:flex;flex-direction:column;border-left:1px solid #222}
+.step-btn{width:16px;height:13px;background:none;border:none;color:#444;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:8px;padding:0;transition:color .1s,background .1s}
+.step-btn:hover{color:#aaa;background:#1e1e1e}
+.step-btn+.step-btn{border-top:1px solid #222}
+/* ── bottom row ── */
+.bottom-row{display:flex;align-items:center;justify-content:space-between}
+.status-saved{font-size:10px;color:#444;display:flex;align-items:center;gap:4px}
+.status-dot{width:6px;height:6px;border-radius:50%;background:#5abb6a;flex-shrink:0}
+.key-hint{font-size:9px;color:#333;display:flex;align-items:center;gap:3px}
+.key-hint kbd{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:3px;padding:1px 4px;font-size:9px;color:#444;font-family:monospace}
+.song-card.focused .key-hint{color:#555}
+.song-card.focused .key-hint kbd{border-color:#4a9eff44;color:#4a9eff88}
+/* ── playback col ── */
+.playback-col{padding:10px 12px;display:flex;flex-direction:column;gap:8px;justify-content:center}
+.wave-wrap{position:relative;height:44px;background:#0a0a0a;border-radius:3px;overflow:hidden;cursor:pointer}
+.playhead{position:absolute;top:0;bottom:0;width:1.5px;pointer-events:none;left:0}
+.transport{display:flex;align-items:center;gap:8px}
+.btn-play{width:26px;height:26px;border-radius:50%;background:#1e3050;border:none;color:#4a9eff;font-size:10px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;padding-left:1px;transition:background .12s}
+.btn-play:hover{background:#2a4060}
+.btn-play.playing{background:#1e3020;color:#5abb6a}
+.seek-wrap{flex:1;height:3px;background:#222;border-radius:2px;cursor:pointer}
+.seek-fill{height:100%;border-radius:2px;pointer-events:none}
+.time-disp{color:#444;font-size:10px;font-variant-numeric:tabular-nums;white-space:nowrap;min-width:72px;text-align:right}
+/* ── delete warning ── */
+.del-warn{background:#1e1010;border:1px solid #5a2020;border-radius:4px;padding:8px 12px;font-size:11px;color:#e06060;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.del-warn-btns{display:flex;gap:6px}
+.del-confirm{background:#3a1a1a;border:1px solid #6a2a2a;color:#e06060;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer}
+.del-cancel{background:none;border:1px solid #333;color:#666;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer}
+</style>
+</head>
+<body>
+
+<div class="app-header">
+  <h1 id="hdrFilename"></h1>
+  <span class="meta" id="hdrMeta"></span>
+  <span class="badge" id="hdrBadge"></span>
+</div>
+
+<div class="overview-section">
+  <div class="section-label">Full Recording</div>
+  <div class="overview-wrap" id="ovWrap">
+    <canvas id="ovCanvas"></canvas>
+    <div id="ovGhost"></div>
+  </div>
+  <div class="overview-hint">Click + drag to add a new segment</div>
+  <div class="overview-times" id="ovTimes"></div>
+</div>
+
+<div class="songs-section">
+  <button class="add-btn" id="addBtn">＋ Add segment</button>
+  <div id="cardsContainer"></div>
+</div>
+
+<audio id="mainAudio" src="/audio" preload="auto"></audio>
+
+<script>
+// ── State ────────────────────────────────────────────────────
+let S = null;          // full state object from /state
+let nextId = 0;
+let focusedId = null;
+let playingId = null;
+let saveTimer = null;
+const audio = document.getElementById('mainAudio');
+
+// ── Boot ─────────────────────────────────────────────────────
+fetch('/state').then(r => r.json()).then(state => {
+  S = state;
+  nextId = S.segments.reduce((m, s) => Math.max(m, s.id), -1) + 1;
+  initHeader();
+  initOverview();
+  initCards();
+});
+
+function initHeader() {
+  const fname = S.source_file.split(/[\\/]/).pop();
+  document.getElementById('hdrFilename').textContent = fname;
+  document.getElementById('hdrMeta').textContent =
+    `${S.duration_min.toFixed(1)} min · ${(S.sample_rate/1000).toFixed(0)}kHz · ${S.channels}ch`;
+  document.getElementById('hdrBadge').textContent = `${S.segments.length} segments`;
+  // time labels
+  const times = document.getElementById('ovTimes');
+  const steps = 5;
+  for (let i = 0; i <= steps; i++) {
+    const m = (S.duration_min * i / steps);
+    const span = document.createElement('span');
+    span.textContent = minToMMSS(m);
+    times.appendChild(span);
+  }
+}
+
+// ── Persistence ──────────────────────────────────────────────
+function saveState() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    fetch('/state', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(S),
+    });
+  }, 200);
+}
+
+// ── Time utils ───────────────────────────────────────────────
+function minToFrac(m) { return m / S.duration_min; }
+function fracToMin(f) { return f * S.duration_min; }
+
+function minToMMSS(m) {
+  const s = Math.round(m * 60);
+  return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+}
+function mmssToMin(str) {
+  const p = str.split(':');
+  if (p.length !== 2) return null;
+  const m = parseInt(p[0]), s = parseInt(p[1]);
+  if (isNaN(m) || isNaN(s)) return null;
+  return (m * 60 + s) / 60;
+}
+
+const STEP_MIN = 1 / 60; // 1 second in minutes
+
+// ── Focus ────────────────────────────────────────────────────
+function setFocus(id) {
+  if (focusedId !== null) document.getElementById(`card${focusedId}`)?.classList.remove('focused');
+  focusedId = id;
+  if (id !== null) document.getElementById(`card${id}`)?.classList.add('focused');
+}
+
+// ── Arrow keys ───────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (focusedId === null) return;
+  if (document.activeElement?.tagName === 'INPUT') return;
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  e.preventDefault();
+  const seg = S.segments.find(s => s.id === focusedId);
+  if (!seg) return;
+  const delta = (e.shiftKey ? 10 : 1) * STEP_MIN;
+  const dur = seg.end_min - seg.start_min;
+  if (e.key === 'ArrowLeft') {
+    seg.start_min = Math.max(0, seg.start_min - delta);
+    seg.end_min = seg.start_min + dur;
+    if (seg.end_min > S.duration_min) { seg.end_min = S.duration_min; seg.start_min = S.duration_min - dur; }
+  } else {
+    seg.end_min = Math.min(S.duration_min, seg.end_min + delta);
+    seg.start_min = seg.end_min - dur;
+    if (seg.start_min < 0) { seg.start_min = 0; seg.end_min = dur; }
+  }
+  refreshSeg(seg.id);
+  saveState();
+});
+
+// ── Drawing helpers ──────────────────────────────────────────
+function setupCanvas(canvas, wrap) {
+  const dpr = devicePixelRatio || 1;
+  const W = wrap.clientWidth, H = wrap.clientHeight;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  return [ctx, W, H];
+}
+
+function drawRMSBars(ctx, rms, W, H, color) {
+  const mid = H / 2, bw = W / rms.length;
+  ctx.fillStyle = color;
+  for (let i = 0; i < rms.length; i++) {
+    const bh = rms[i] * mid * 0.88;
+    ctx.fillRect(i * bw, mid - bh, Math.max(1, bw - 0.5), bh * 2);
+  }
+}
+
+// ── Overview ─────────────────────────────────────────────────
+function initOverview() {
+  drawOverview();
+  setupOverviewInteraction();
+}
+
+function drawOverview() {
+  const wrap = document.getElementById('ovWrap');
+  const canvas = document.getElementById('ovCanvas');
+  const [ctx, W, H] = setupCanvas(canvas, wrap);
+  ctx.fillStyle = '#080808'; ctx.fillRect(0, 0, W, H);
+  drawRMSBars(ctx, S.overview_rms, W, H, '#2a2a2a');
+  for (const seg of S.segments) {
+    const sx = minToFrac(seg.start_min) * W;
+    const sw = (minToFrac(seg.end_min) - minToFrac(seg.start_min)) * W;
+    ctx.fillStyle = seg.color + (seg.id === focusedId ? '44' : (seg.exported ? '35' : '28'));
+    ctx.fillRect(sx, 0, sw, H);
+    ctx.fillStyle = seg.color + (seg.exported ? 'aa' : 'cc');
+    ctx.fillRect(sx, 0, 2, H);
+    ctx.fillRect(sx + sw - 2, 0, 2, H);
+  }
+}
+
+function setupOverviewInteraction() {
+  const ovWrap = document.getElementById('ovWrap');
+  const ghost = document.getElementById('ovGhost');
+  let dragging = false, startFrac = 0;
+  ovWrap.addEventListener('mousedown', e => {
+    const r = ovWrap.getBoundingClientRect();
+    startFrac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    dragging = true;
+    ghost.style.display = 'block';
+    ghost.style.left = (startFrac * 100) + '%';
+    ghost.style.width = '0';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const r = ovWrap.getBoundingClientRect();
+    const cur = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    const l = Math.min(startFrac, cur), rr = Math.max(startFrac, cur);
+    ghost.style.left = (l * 100) + '%';
+    ghost.style.width = ((rr - l) * 100) + '%';
+  });
+  document.addEventListener('mouseup', e => {
+    if (!dragging) return;
+    dragging = false;
+    ghost.style.display = 'none';
+    const r = ovWrap.getBoundingClientRect();
+    const end = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    const l = Math.min(startFrac, end), rr = Math.max(startFrac, end);
+    if (rr - l > 0.005) addSegment(fracToMin(l), fracToMin(rr));
+  });
+}
+
+// ── Cards ────────────────────────────────────────────────────
+function initCards() {
+  document.getElementById('cardsContainer').innerHTML = '';
+  S.segments.forEach(seg => buildCard(seg));
+  document.getElementById('hdrBadge').textContent = `${S.segments.length} segments`;
+}
+
+function buildCard(seg) {
+  const card = document.createElement('div');
+  card.className = 'song-card';
+  card.id = `card${seg.id}`;
+  const exportLabel = seg.exported ? '✓ Exported' : '▼ Export WAV';
+  card.innerHTML = `
+    <div class="card-header">
+      <div class="song-num" style="background:${seg.color}22;color:${seg.color}">${S.segments.indexOf(seg)+1}</div>
+      <input class="song-name" id="name${seg.id}" value="${seg.name}" />
+      <button class="btn-export${seg.exported?' exported':''}" id="export${seg.id}">${exportLabel}</button>
+      <button class="btn-del" id="del${seg.id}">✕</button>
+    </div>
+    <div class="card-body">
+      <div class="context-col">
+        <div class="ctx-label">Position — drag to move · handles to resize</div>
+        <div class="ctx-outer" style="position:relative">
+          <div class="ctx-wrap" id="ctxWrap${seg.id}">
+            <canvas class="ctx-canvas" id="ctxCanvas${seg.id}"></canvas>
+            <div class="seg-region" id="region${seg.id}" style="left:0;width:0;pointer-events:none">
+              <div class="seg-fill" style="background:${seg.color}18"></div>
+              <div class="seg-border" style="border-color:${seg.color}"></div>
+              <div class="seg-body" id="segBody${seg.id}"></div>
+            </div>
+          </div>
+          <div class="handle left" id="lh${seg.id}" style="position:absolute;top:0">
+            <div class="handle-bar" style="background:${seg.color}"></div>
+          </div>
+          <div class="handle right" id="rh${seg.id}" style="position:absolute;top:0">
+            <div class="handle-bar" style="background:${seg.color}"></div>
+          </div>
+        </div>
+        <div class="time-row">
+          <label>Start</label>
+          <div class="time-field">
+            <input class="time-input" id="si${seg.id}" value="${minToMMSS(seg.start_min)}" />
+            <div class="steppers">
+              <button class="step-btn" data-seg="${seg.id}" data-field="start" data-dir="1">▲</button>
+              <button class="step-btn" data-seg="${seg.id}" data-field="start" data-dir="-1">▼</button>
+            </div>
+          </div>
+          <span class="time-sep">→</span>
+          <label>End</label>
+          <div class="time-field">
+            <input class="time-input" id="ei${seg.id}" value="${minToMMSS(seg.end_min)}" />
+            <div class="steppers">
+              <button class="step-btn" data-seg="${seg.id}" data-field="end" data-dir="1">▲</button>
+              <button class="step-btn" data-seg="${seg.id}" data-field="end" data-dir="-1">▼</button>
+            </div>
+          </div>
+        </div>
+        <div class="bottom-row">
+          <div class="status-saved"><span class="status-dot"></span>Autosaved</div>
+          <div class="key-hint"><kbd>←</kbd><kbd>→</kbd> 1s &nbsp;<kbd>⇧</kbd>10s</div>
+        </div>
+      </div>
+      <div class="playback-col">
+        <div class="wave-wrap" id="waveWrap${seg.id}" style="cursor:pointer">
+          <canvas id="waveCanvas${seg.id}" style="width:100%;height:44px"></canvas>
+          <div class="playhead" id="ph${seg.id}" style="background:${seg.color}"></div>
+        </div>
+        <div class="transport">
+          <button class="btn-play" id="play${seg.id}">▶</button>
+          <div class="seek-wrap" id="seekWrap${seg.id}">
+            <div class="seek-fill" id="seekFill${seg.id}" style="background:${seg.color};width:0%"></div>
+          </div>
+          <div class="time-disp" id="td${seg.id}">0:00 / ${minToMMSS(seg.end_min - seg.start_min)}</div>
+        </div>
+      </div>
+    </div>`;
+
+  document.getElementById('cardsContainer').appendChild(card);
+
+  // Focus on click
+  card.addEventListener('mousedown', e => {
+    if (!e.target.closest('input') && !e.target.closest('button')) setFocus(seg.id);
+  });
+
+  // Name change
+  document.getElementById(`name${seg.id}`).addEventListener('change', e => {
+    seg.name = e.target.value; saveState();
+  });
+
+  // Time inputs
+  document.getElementById(`si${seg.id}`).addEventListener('change', e => {
+    const v = mmssToMin(e.target.value);
+    if (v !== null && v >= 0 && v < seg.end_min - STEP_MIN) {
+      seg.start_min = v; refreshSeg(seg.id); saveState();
+    } else { e.target.value = minToMMSS(seg.start_min); }
+  });
+  document.getElementById(`ei${seg.id}`).addEventListener('change', e => {
+    const v = mmssToMin(e.target.value);
+    if (v !== null && v > seg.start_min + STEP_MIN && v <= S.duration_min) {
+      seg.end_min = v; refreshSeg(seg.id); saveState();
+    } else { e.target.value = minToMMSS(seg.end_min); }
+  });
+
+  // Steppers
+  card.querySelectorAll('.step-btn').forEach(btn => {
+    let iv = null;
+    function step() {
+      const field = btn.dataset.field, dir = parseInt(btn.dataset.dir);
+      setFocus(seg.id);
+      if (field === 'start') {
+        const nv = seg.start_min + dir * STEP_MIN;
+        if (nv >= 0 && nv < seg.end_min - STEP_MIN) { seg.start_min = nv; refreshSeg(seg.id); saveState(); }
+      } else {
+        const nv = seg.end_min + dir * STEP_MIN;
+        if (nv > seg.start_min + STEP_MIN && nv <= S.duration_min) { seg.end_min = nv; refreshSeg(seg.id); saveState(); }
+      }
+    }
+    btn.addEventListener('mousedown', e => { e.preventDefault(); step(); iv = setInterval(step, 120); });
+    document.addEventListener('mouseup', () => { clearInterval(iv); iv = null; });
+  });
+
+  // Export
+  document.getElementById(`export${seg.id}`).addEventListener('click', () => {
+    const filename = `song_${String(seg.id + 1).padStart(2,'0')}.wav`;
+    fetch(`/export/${filename}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({segment_id: seg.id, start_min: seg.start_min, end_min: seg.end_min}),
+    }).then(r => r.json()).then(() => {
+      seg.exported = true;
+      const btn = document.getElementById(`export${seg.id}`);
+      btn.textContent = '✓ Exported';
+      btn.classList.add('exported');
+      drawOverview();
+    });
+  });
+
+  // Delete
+  document.getElementById(`del${seg.id}`).addEventListener('click', () => {
+    if (seg.exported) {
+      // Show inline warning
+      const warn = document.createElement('div');
+      warn.className = 'del-warn';
+      warn.innerHTML = `<span>This won't delete the exported WAV file.</span>
+        <div class="del-warn-btns">
+          <button class="del-cancel">Cancel</button>
+          <button class="del-confirm">Delete segment</button>
+        </div>`;
+      card.insertAdjacentElement('afterend', warn);
+      warn.querySelector('.del-cancel').onclick = () => warn.remove();
+      warn.querySelector('.del-confirm').onclick = () => { warn.remove(); removeSegment(seg.id); };
+    } else {
+      removeSegment(seg.id);
+    }
+  });
+
+  // Play/pause
+  document.getElementById(`play${seg.id}`).addEventListener('click', () => togglePlay(seg.id));
+
+  // Seek via waveform click
+  document.getElementById(`waveWrap${seg.id}`).addEventListener('click', e => {
+    const frac = e.offsetX / e.currentTarget.clientWidth;
+    seekSeg(seg.id, frac);
+  });
+
+  // Seek via seek bar click
+  document.getElementById(`seekWrap${seg.id}`).addEventListener('click', e => {
+    const frac = e.offsetX / e.currentTarget.clientWidth;
+    seekSeg(seg.id, frac);
+  });
+
+  // Drag handles
+  setTimeout(() => {
+    refreshSeg(seg.id);
+    drawMiniWave(seg.id);
+    setupDrags(seg);
+  }, 0);
+}
+
+function removeSegment(segId) {
+  if (playingId === segId) stopAudio();
+  if (focusedId === segId) setFocus(null);
+  S.segments = S.segments.filter(s => s.id !== segId);
+  document.getElementById(`card${segId}`)?.remove();
+  saveState();
+  drawOverview();
+  renumber();
+}
+
+function renumber() {
+  S.segments.forEach((seg, i) => {
+    const el = document.querySelector(`#card${seg.id} .song-num`);
+    if (el) el.textContent = i + 1;
+  });
+  document.getElementById('hdrBadge').textContent = `${S.segments.length} segments`;
+}
+
+// ── Refresh a segment's visuals ──────────────────────────────
+function refreshSeg(segId) {
+  const seg = S.segments.find(s => s.id === segId); if (!seg) return;
+  drawCtxCanvas(segId);
+  updateHandles(segId);
+  updateTimeInputs(segId);
+  drawOverview();
+}
+
+function drawCtxCanvas(segId) {
+  const seg = S.segments.find(s => s.id === segId); if (!seg) return;
+  const wrap = document.getElementById(`ctxWrap${segId}`);
+  const canvas = document.getElementById(`ctxCanvas${segId}`);
+  if (!wrap || !canvas) return;
+  const [ctx, W, H] = setupCanvas(canvas, wrap);
+  ctx.fillStyle = '#080808'; ctx.fillRect(0, 0, W, H);
+  drawRMSBars(ctx, S.overview_rms, W, H, '#292929');
+  const sf_ = minToFrac(seg.start_min), ef = minToFrac(seg.end_min);
+  const sx = sf_ * W, sw = (ef - sf_) * W;
+  ctx.fillStyle = seg.color + '22'; ctx.fillRect(sx, 0, sw, H);
+  ctx.strokeStyle = seg.color; ctx.lineWidth = 1.5;
+  ctx.strokeRect(sx + 0.75, 0.75, sw - 1.5, H - 1.5);
+}
+
+function drawMiniWave(segId) {
+  const seg = S.segments.find(s => s.id === segId); if (!seg) return;
+  const wrap = document.getElementById(`waveWrap${segId}`);
+  const canvas = document.getElementById(`waveCanvas${segId}`);
+  if (!wrap || !canvas) return;
+  const [ctx, W, H] = setupCanvas(canvas, wrap);
+  ctx.fillStyle = '#0a0a0a'; ctx.fillRect(0, 0, W, H);
+  const i0 = Math.floor(minToFrac(seg.start_min) * S.overview_rms.length);
+  const i1 = Math.floor(minToFrac(seg.end_min) * S.overview_rms.length);
+  const slice = S.overview_rms.slice(i0, i1); if (!slice.length) return;
+  const peak = Math.max(...slice, 0.01);
+  const normed = slice.map(v => v / peak);
+  drawRMSBars(ctx, normed, W, H, seg.color + 'aa');
+}
+
+function updateHandles(segId) {
+  const seg = S.segments.find(s => s.id === segId); if (!seg) return;
+  const wrap = document.getElementById(`ctxWrap${segId}`); if (!wrap) return;
+  const W = wrap.clientWidth;
+  const lx = minToFrac(seg.start_min) * W, rx = minToFrac(seg.end_min) * W;
+  const lh = document.getElementById(`lh${segId}`);
+  const rh = document.getElementById(`rh${segId}`);
+  const region = document.getElementById(`region${segId}`);
+  if (lh) lh.style.left = lx + 'px';
+  if (rh) rh.style.left = rx + 'px';
+  if (region) { region.style.left = lx + 'px'; region.style.width = (rx - lx) + 'px'; }
+}
+
+function updateTimeInputs(segId) {
+  const seg = S.segments.find(s => s.id === segId); if (!seg) return;
+  const si = document.getElementById(`si${segId}`);
+  const ei = document.getElementById(`ei${segId}`);
+  if (si && document.activeElement !== si) si.value = minToMMSS(seg.start_min);
+  if (ei && document.activeElement !== ei) ei.value = minToMMSS(seg.end_min);
+  const td = document.getElementById(`td${segId}`);
+  if (td) td.textContent = `0:00 / ${minToMMSS(seg.end_min - seg.start_min)}`;
+}
+
+// ── Drag handles ─────────────────────────────────────────────
+function setupDrags(seg) {
+  const wrap = document.getElementById(`ctxWrap${seg.id}`);
+  function startDrag(mode, e) {
+    e.preventDefault(); e.stopPropagation();
+    setFocus(seg.id);
+    const rect = wrap.getBoundingClientRect();
+    const dur = seg.end_min - seg.start_min;
+    const startX = e.clientX, origS = seg.start_min, origE = seg.end_min;
+    function onMove(ev) {
+      const dx = ((ev.clientX - startX) / rect.width) * S.duration_min;
+      if (mode === 'left') {
+        seg.start_min = Math.max(0, Math.min(origS + dx, seg.end_min - STEP_MIN));
+      } else if (mode === 'right') {
+        seg.end_min = Math.max(seg.start_min + STEP_MIN, Math.min(S.duration_min, origE + dx));
+      } else {
+        let ns = origS + dx, ne = origE + dx;
+        if (ns < 0) { ns = 0; ne = dur; }
+        if (ne > S.duration_min) { ne = S.duration_min; ns = S.duration_min - dur; }
+        seg.start_min = ns; seg.end_min = ne;
+      }
+      refreshSeg(seg.id); drawMiniWave(seg.id);
+    }
+    function onUp() {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      saveState();
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
+  document.getElementById(`lh${seg.id}`)?.addEventListener('mousedown', e => startDrag('left', e));
+  document.getElementById(`rh${seg.id}`)?.addEventListener('mousedown', e => startDrag('right', e));
+  const body = document.getElementById(`segBody${seg.id}`);
+  if (body) { body.style.pointerEvents = 'all'; body.addEventListener('mousedown', e => startDrag('move', e)); }
+}
+
+// ── Audio playback ───────────────────────────────────────────
+function stopAudio() {
+  if (playingId === null) return;
+  audio.pause();
+  const btn = document.getElementById(`play${playingId}`);
+  if (btn) { btn.textContent = '▶'; btn.classList.remove('playing'); }
+  playingId = null;
+}
+
+function togglePlay(segId) {
+  const seg = S.segments.find(s => s.id === segId);
+  if (playingId === segId) { stopAudio(); return; }
+  stopAudio();
+  audio.currentTime = seg.start_min * 60;
+  audio.play();
+  playingId = segId;
+  const btn = document.getElementById(`play${segId}`);
+  if (btn) { btn.textContent = '⏸'; btn.classList.add('playing'); }
+}
+
+function seekSeg(segId, frac) {
+  const seg = S.segments.find(s => s.id === segId);
+  audio.currentTime = seg.start_min * 60 + frac * (seg.end_min - seg.start_min) * 60;
+  if (playingId !== segId) { stopAudio(); audio.play(); playingId = segId; }
+  const btn = document.getElementById(`play${segId}`);
+  if (btn) { btn.textContent = '⏸'; btn.classList.add('playing'); }
+}
+
+audio.addEventListener('timeupdate', () => {
+  if (playingId === null) return;
+  const seg = S.segments.find(s => s.id === playingId);
+  if (!seg) return;
+  const segDurSec = (seg.end_min - seg.start_min) * 60;
+  const elapsed = Math.max(0, audio.currentTime - seg.start_min * 60);
+  if (elapsed >= segDurSec) { stopAudio(); return; }
+  const frac = elapsed / segDurSec;
+  const ph = document.getElementById(`ph${playingId}`);
+  const sf_ = document.getElementById(`seekFill${playingId}`);
+  const wrap = document.getElementById(`waveWrap${playingId}`);
+  if (ph && wrap) ph.style.left = (frac * wrap.clientWidth) + 'px';
+  if (sf_) sf_.style.width = (frac * 100) + '%';
+  const td = document.getElementById(`td${playingId}`);
+  if (td) td.textContent = `${minToMMSS(elapsed/60)} / ${minToMMSS(seg.end_min - seg.start_min)}`;
+});
+
+// ── Add segment ──────────────────────────────────────────────
+function addSegment(startMin, endMin) {
+  const seg = {
+    id: nextId++,
+    name: `Song ${String(nextId).padStart(2,'0')}`,
+    start_min: Math.round(startMin * 3600) / 3600,
+    end_min: Math.round(endMin * 3600) / 3600,
+    color: ['#4a9eff','#5abb6a','#e07840','#b06adb','#e0c040','#40b8c8','#e05070'][S.segments.length % 7],
+    exported: false,
+  };
+  S.segments.push(seg);
+  buildCard(seg);
+  saveState();
+  drawOverview();
+  setFocus(seg.id);
+  document.getElementById('hdrBadge').textContent = `${S.segments.length} segments`;
+}
+
+document.getElementById('addBtn').addEventListener('click', () => {
+  const used = S.segments.map(s => [s.start_min, s.end_min]).sort((a,b) => a[0]-b[0]);
+  let best = [0, S.duration_min * 0.15];
+  let prev = 0;
+  for (const [s, e] of used) {
+    if (s - prev > S.duration_min * 0.1) { best = [prev + S.duration_min*0.01, s - S.duration_min*0.01]; break; }
+    prev = e;
+  }
+  if (S.duration_min - prev > S.duration_min * 0.1)
+    best = [prev + S.duration_min*0.01, Math.min(S.duration_min, prev + S.duration_min*0.15)];
+  addSegment(best[0], best[1]);
+});
+
+// ── Resize ───────────────────────────────────────────────────
+window.addEventListener('resize', () => {
+  drawOverview();
+  S.segments.forEach(seg => { refreshSeg(seg.id); drawMiniWave(seg.id); });
+});
+</script>
+</body>
+</html>
