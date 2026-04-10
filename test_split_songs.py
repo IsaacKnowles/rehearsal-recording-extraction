@@ -7,7 +7,7 @@ import tempfile
 import numpy as np
 
 sys.path.insert(0, ".")
-from split_songs import compute_rms, find_songs, downsample_rms, build_metadata, COLORS
+from split_songs import compute_rms, find_songs, downsample_rms, build_metadata, COLORS, write_segments_json
 
 import pytest
 
@@ -138,6 +138,20 @@ def test_build_metadata_color_cycles():
     assert meta["segments"][11]["color"] == COLORS[11 % len(COLORS)]
 
 
+def test_write_segments_json_creates_file():
+    rms = np.array([0.01] * 60 + [0.8] * 120 + [0.01] * 60, dtype=np.float64)
+    meta = build_metadata("raw/test.wav", 48000, 2, rms, 1.0, [(60, 180)])
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = write_segments_json(tmpdir, meta)
+        assert os.path.exists(path)
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        assert data["source_file"] == "raw/test.wav"
+        assert len(data["segments"]) == 1
+        assert data["segments"][0]["exported"] is False
+        assert data["segments"][0]["id"] == 0
+
+
 
 
 if __name__ == "__main__":
@@ -155,6 +169,7 @@ if __name__ == "__main__":
         test_build_metadata_top_level_keys,
         test_build_metadata_segment_fields,
         test_build_metadata_color_cycles,
+        test_write_segments_json_creates_file,
     ]
     for t in tests:
         try:

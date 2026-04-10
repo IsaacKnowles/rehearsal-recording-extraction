@@ -88,39 +88,17 @@ def find_songs(
     ]
 
 
-def parse_args():
-    p = argparse.ArgumentParser(
-        description="Split rehearsal WAV into songs by volume detection"
-    )
-    p.add_argument("input", help="Input WAV file")
-    p.add_argument(
-        "-o", "--output-dir", default=None,
-        help="Output directory (default: <input_stem>_songs/)"
-    )
-    p.add_argument(
-        "--threshold-db", type=float, default=-40.0,
-        help="RMS threshold in dBFS below which a window is 'quiet' (default: -40)"
-    )
-    p.add_argument(
-        "--min-song-minutes", type=float, default=2.0,
-        help="Minimum song duration in minutes (default: 2)"
-    )
-    p.add_argument(
-        "--merge-gap-seconds", type=float, default=20.0,
-        help="Merge loud segments separated by fewer than this many quiet seconds (default: 20)"
-    )
-    p.add_argument(
-        "--window-seconds", type=float, default=1.0,
-        help="Analysis window size in seconds (default: 1.0)"
-    )
-    p.add_argument(
-        "--pad-seconds", type=float, default=2.0,
-        help="Silence padding added before/after each exported song (default: 2)"
-    )
-    p.add_argument(
-        "--preview", action="store_true",
-        help="Print detected segments without writing files"
-    )
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Split rehearsal recording into songs.")
+    p.add_argument("input", help="Path to input WAV file")
+    p.add_argument("-o", "--output-dir", default=None, help="Output directory (default: <stem>_songs/)")
+    p.add_argument("--threshold-db", type=float, default=-40.0, help="Loud/quiet threshold in dBFS (default: -40)")
+    p.add_argument("--min-song-minutes", type=float, default=2.0, help="Minimum song duration in minutes (default: 2)")
+    p.add_argument("--merge-gap-seconds", type=float, default=20.0, help="Merge segments closer than this (default: 20s)")
+    p.add_argument("--window-seconds", type=float, default=1.0, help="RMS window size in seconds (default: 1.0)")
+    p.add_argument("--port", type=int, default=5123, help="Review server port (default: 5123)")
+    p.add_argument("--preview", action="store_true", help="Print detected songs without writing files or starting server")
+    p.add_argument("--reset", action="store_true", help="Re-run detection even if segments.json already exists")
     return p.parse_args()
 
 
@@ -198,7 +176,37 @@ def build_metadata(
     }
 
 
+def write_segments_json(output_dir: str, metadata: dict) -> str:
+    """Write segments.json to output_dir. Returns the path written."""
+    path = os.path.join(output_dir, "segments.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, separators=(",", ":"))
+    return path
+
+
+def launch_server(output_dir: str, input_path: str, port: int) -> None:
+    """Import and start the review server. Blocks until Ctrl+C."""
+    import threading
+    import webbrowser
+    import review_server
+
+    url = f"http://localhost:{port}"
+    threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+    review_server.run(output_dir=output_dir, source_wav=input_path, port=port)
+
+
 def main(args: argparse.Namespace) -> None:
+    stem = os.path.splitext(os.path.basename(args.input))[0]
+    output_dir = args.output_dir or f"{stem}_songs"
+    segments_json = os.path.join(output_dir, "segments.json")
+
+    # Session recovery: skip detection if segments.json already exists
+    if os.path.exists(segments_json) and not args.reset:
+        print(f"Loading existing session from {segments_json}")
+        print("  (pass --reset to re-run detection)")
+        launch_server(output_dir, args.input, args.port)
+        return
+
     # --- Load ---
     print(f"Reading {args.input} ...")
     info = sf.info(args.input)
@@ -230,12 +238,10 @@ def main(args: argparse.Namespace) -> None:
         print("No songs detected. Try lowering --threshold-db.")
         return
 
-    print(f"Detected {len(songs)} song(s):")
-    pad_frames = int(args.pad_seconds * rate)
-
     def to_frames(w: int) -> int:
         return int(w * window_sec * rate)
 
+    print(f"Detected {len(songs)} song(s):")
     for i, (w_start, w_end) in enumerate(songs, 1):
         f_start = to_frames(w_start)
         f_end = to_frames(w_end)
@@ -252,31 +258,12 @@ def main(args: argparse.Namespace) -> None:
         print("\n(--preview: no files written)")
         return
 
-    # --- Export ---
-    stem = os.path.splitext(os.path.basename(args.input))[0]
-    output_dir = args.output_dir or f"{stem}_songs"
     os.makedirs(output_dir, exist_ok=True)
+    metadata = build_metadata(args.input, rate, info.channels, rms, window_sec, songs)
+    json_path = write_segments_json(output_dir, metadata)
+    print(f"\n  -> {json_path}  (segments)")
 
-    for i, (w_start, w_end) in enumerate(songs, 1):
-        f_start = max(0, to_frames(w_start) - pad_frames)
-        f_end = min(len(samples), to_frames(w_end) + pad_frames)
-        chunk = samples[f_start:f_end]
-
-        out_path = os.path.join(output_dir, f"song_{i:02d}.wav")
-        sf.write(out_path, chunk, rate, subtype="FLOAT")
-        duration_sec = len(chunk) / rate
-        print(f"  -> {out_path}  ({duration_sec/60:.1f} min)")
-
-    metadata = build_metadata(
-        input_path=args.input,
-        rate=rate,
-        channels=info.channels,
-        rms=rms,
-        window_sec=window_sec,
-        songs=songs,
-    )
-
-    print(f"\nDone. {len(songs)} files written to {output_dir}/")
+    launch_server(output_dir, args.input, args.port)
 
 
 if __name__ == "__main__":
