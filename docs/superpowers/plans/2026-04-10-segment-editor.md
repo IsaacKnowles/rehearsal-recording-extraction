@@ -1,3 +1,709 @@
+# Segment Editor Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Replace auto-export with an interactive review server — `split_songs.py` detects songs, writes `segments.json`, and starts a local Flask server that serves a browser UI for editing segments and exporting individual WAVs on demand.
+
+**Architecture:** Three files: `split_songs.py` (detection only), `review_server.py` (Flask HTTP server), `review_ui.html` (self-contained frontend). The UI talks to the server via `fetch()`; every change is persisted to `segments.json` so sessions survive restarts.
+
+**Tech Stack:** Python 3.9, numpy, soundfile, Flask 2+; vanilla HTML/CSS/Canvas/JS in the frontend.
+
+**Prerequisite:** Prior plan (`2026-04-08-rehearsal-splitter.md` and `2026-04-08-review-ui.md`) must be complete — `split_songs.py` must exist with all functions working.
+
+---
+
+## File Structure
+
+- **Modify:** `split_songs.py` — rework `build_metadata` output schema; remove `_HTML_TEMPLATE`, `generate_html`; add `write_segments_json`, `launch_server`; update `main()` and `parse_args()`
+- **Modify:** `test_split_songs.py` — update `build_metadata` tests to new schema; remove `generate_html` test; add `write_segments_json` test
+- **Modify:** `requirements.txt` — add `flask>=2.0`
+- **Create:** `review_server.py` — Flask app: serve UI, stream audio, read/write state, export WAV
+- **Create:** `test_review_server.py` — pytest tests for all server endpoints
+- **Create:** `review_ui.html` — complete interactive frontend
+
+---
+
+### Task 1: Rework `build_metadata` and clean up HTML generation
+
+The `build_metadata` output schema changes to match `segments.json`. `_HTML_TEMPLATE`, `generate_html`, and their test are removed since `review_ui.html` replaces them.
+
+**Files:**
+- Modify: `split_songs.py`
+- Modify: `test_split_songs.py`
+
+- [ ] **Step 1: Update the `build_metadata` tests to the new schema**
+
+In `test_split_songs.py`, replace the three `test_build_metadata_*` tests and remove `test_generate_html_creates_file_with_embedded_data`. The updated tests are:
+
+```python
+def test_build_metadata_top_level_keys():
+    rms = np.array([0.01] * 60 + [0.8] * 120 + [0.01] * 60, dtype=np.float64)
+    meta = build_metadata("raw/test.wav", 48000, 2, rms, 1.0, [(60, 180)])
+    assert meta["source_file"] == "raw/test.wav"
+    assert meta["sample_rate"] == 48000
+    assert meta["channels"] == 2
+    assert meta["duration_min"] == pytest.approx(4.0, abs=0.1)
+    assert len(meta["overview_rms"]) == 2000
+    assert len(meta["segments"]) == 1
+
+
+def test_build_metadata_segment_fields():
+    rms = np.array([0.01] * 60 + [0.8] * 120 + [0.01] * 60, dtype=np.float64)
+    meta = build_metadata("raw/test.wav", 48000, 2, rms, 1.0, [(60, 180)])
+    s = meta["segments"][0]
+    assert s["id"] == 0
+    assert s["name"] == "Song 01"
+    assert s["color"] == COLORS[0]
+    assert s["start_min"] == pytest.approx(1.0, abs=0.01)
+    assert s["end_min"] == pytest.approx(3.0, abs=0.01)
+    assert s["exported"] is False
+    assert "waveform" not in s
+    assert "file" not in s
+
+
+def test_build_metadata_color_cycles():
+    n_songs = 12
+    rms = np.ones(n_songs * 300, dtype=np.float64) * 0.5
+    songs = [(i * 300, (i + 1) * 300) for i in range(n_songs)]
+    meta = build_metadata("x.wav", 48000, 2, rms, 1.0, songs)
+    assert meta["segments"][11]["color"] == COLORS[11 % len(COLORS)]
+```
+
+Also update the top-level import line — remove `generate_html`:
+
+```python
+from split_songs import compute_rms, find_songs, downsample_rms, build_metadata, COLORS
+```
+
+And update the `tests` list at the bottom: replace old `test_build_metadata_*` entries and remove `test_generate_html_creates_file_with_embedded_data`, then add the new test names:
+
+```python
+tests = [
+    test_compute_rms_silent,
+    test_compute_rms_loud,
+    test_compute_rms_mixed,
+    test_find_songs_basic,
+    test_find_songs_merges_gap,
+    test_find_songs_filters_short,
+    test_downsample_rms_reduces_length,
+    test_downsample_rms_normalizes_to_one,
+    test_downsample_rms_short_input_pads,
+    test_downsample_rms_silent_signal,
+    test_build_metadata_top_level_keys,
+    test_build_metadata_segment_fields,
+    test_build_metadata_color_cycles,
+]
+```
+
+- [ ] **Step 2: Run tests — confirm they fail (build_metadata tests fail, generate_html test gone)**
+
+```bash
+python3 test_split_songs.py
+```
+
+Expected: `FAIL  test_build_metadata_top_level_keys`, `FAIL  test_build_metadata_segment_fields`, `FAIL  test_build_metadata_color_cycles` (old schema still in place). The other 10 tests should PASS.
+
+- [ ] **Step 3: Update `build_metadata` in `split_songs.py`**
+
+Replace the existing `build_metadata` function:
+
+```python
+def build_metadata(
+    input_path: str,
+    rate: int,
+    channels: int,
+    rms: np.ndarray,
+    window_sec: float,
+    songs: list[tuple[int, int]],
+) -> dict:
+    """Build the segments.json payload for the review server.
+
+    Args:
+        input_path: path to the original WAV file (stored as-is for server use)
+        rate: sample rate in Hz
+        channels: number of audio channels
+        rms: full per-window RMS array from compute_rms()
+        window_sec: window size in seconds used during analysis
+        songs: list of (start_window, end_window) tuples from find_songs()
+
+    Returns:
+        Dict matching the segments.json schema.
+    """
+    total_sec = len(rms) * window_sec
+    duration_min = total_sec / 60.0
+
+    segment_list = []
+    for i, (w_start, w_end) in enumerate(songs):
+        segment_list.append({
+            "id": i,
+            "name": f"Song {i + 1:02d}",
+            "start_min": round(w_start * window_sec / 60.0, 4),
+            "end_min": round(w_end * window_sec / 60.0, 4),
+            "color": COLORS[i % len(COLORS)],
+            "exported": False,
+        })
+
+    return {
+        "source_file": input_path,
+        "duration_min": round(duration_min, 2),
+        "sample_rate": rate,
+        "channels": channels,
+        "overview_rms": downsample_rms(rms, 2000, normalize=True),
+        "segments": segment_list,
+    }
+```
+
+- [ ] **Step 4: Remove `_HTML_TEMPLATE` and `generate_html` from `split_songs.py`**
+
+Delete the `_HTML_TEMPLATE = r"""..."""` constant (currently lines ~25–438) and the `generate_html` function (the ~10 lines after it). These are replaced by `review_ui.html`.
+
+- [ ] **Step 5: Run tests — confirm all 13 pass**
+
+```bash
+python3 test_split_songs.py
+```
+
+Expected: all 13 tests PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add split_songs.py test_split_songs.py
+git commit -m "feat: rework build_metadata to segments.json schema, remove HTML generation"
+```
+
+---
+
+### Task 2: Add `write_segments_json`, `launch_server`, update `main()`
+
+**Files:**
+- Modify: `split_songs.py`
+- Modify: `test_split_songs.py`
+
+- [ ] **Step 1: Write the failing test for `write_segments_json`**
+
+Append to `test_split_songs.py` (also add `write_segments_json` to the import line and `tests` list):
+
+```python
+from split_songs import compute_rms, find_songs, downsample_rms, build_metadata, COLORS, write_segments_json
+```
+
+```python
+def test_write_segments_json_creates_file():
+    rms = np.array([0.01] * 60 + [0.8] * 120 + [0.01] * 60, dtype=np.float64)
+    meta = build_metadata("raw/test.wav", 48000, 2, rms, 1.0, [(60, 180)])
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = write_segments_json(tmpdir, meta)
+        assert os.path.exists(path)
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        assert data["source_file"] == "raw/test.wav"
+        assert len(data["segments"]) == 1
+        assert data["segments"][0]["exported"] is False
+        assert data["segments"][0]["id"] == 0
+```
+
+Add it to the `tests` list at the bottom of `test_split_songs.py`.
+
+- [ ] **Step 2: Run test — confirm it fails**
+
+```bash
+python3 test_split_songs.py
+```
+
+Expected: `FAIL  test_write_segments_json_creates_file: cannot import name 'write_segments_json'`
+
+- [ ] **Step 3: Add `write_segments_json` and `launch_server` to `split_songs.py`**
+
+Add these two functions after `build_metadata`:
+
+```python
+def write_segments_json(output_dir: str, metadata: dict) -> str:
+    """Write segments.json to output_dir. Returns the path written."""
+    path = os.path.join(output_dir, "segments.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, separators=(",", ":"))
+    return path
+
+
+def launch_server(output_dir: str, input_path: str, port: int) -> None:
+    """Import and start the review server. Blocks until Ctrl+C."""
+    import threading
+    import webbrowser
+    import review_server
+
+    url = f"http://localhost:{port}"
+    threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+    review_server.run(output_dir=output_dir, source_wav=input_path, port=port)
+```
+
+- [ ] **Step 4: Update `parse_args` in `split_songs.py`**
+
+Remove `--pad-seconds` (no longer needed — WAV export is gone). Add `--port` and `--reset`:
+
+```python
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Split rehearsal recording into songs.")
+    p.add_argument("input", help="Path to input WAV file")
+    p.add_argument("-o", "--output-dir", default=None, help="Output directory (default: <stem>_songs/)")
+    p.add_argument("--threshold-db", type=float, default=-40.0, help="Loud/quiet threshold in dBFS (default: -40)")
+    p.add_argument("--min-song-minutes", type=float, default=2.0, help="Minimum song duration in minutes (default: 2)")
+    p.add_argument("--merge-gap-seconds", type=float, default=20.0, help="Merge segments closer than this (default: 20s)")
+    p.add_argument("--window-seconds", type=float, default=1.0, help="RMS window size in seconds (default: 1.0)")
+    p.add_argument("--port", type=int, default=5123, help="Review server port (default: 5123)")
+    p.add_argument("--preview", action="store_true", help="Print detected songs without writing files or starting server")
+    p.add_argument("--reset", action="store_true", help="Re-run detection even if segments.json already exists")
+    return p.parse_args()
+```
+
+- [ ] **Step 5: Update `main()` in `split_songs.py`**
+
+Replace the entire `main()` function:
+
+```python
+def main(args: argparse.Namespace) -> None:
+    stem = os.path.splitext(os.path.basename(args.input))[0]
+    output_dir = args.output_dir or f"{stem}_songs"
+    segments_json = os.path.join(output_dir, "segments.json")
+
+    # Session recovery: skip detection if segments.json already exists
+    if os.path.exists(segments_json) and not args.reset:
+        print(f"Loading existing session from {segments_json}")
+        print("  (pass --reset to re-run detection)")
+        launch_server(output_dir, args.input, args.port)
+        return
+
+    # --- Load ---
+    print(f"Reading {args.input} ...")
+    info = sf.info(args.input)
+    print(
+        f"  {info.frames / info.samplerate / 60:.1f} min  |  "
+        f"{info.samplerate} Hz  {info.channels}ch  {info.format}"
+    )
+    samples, rate = sf.read(args.input, dtype="float32", always_2d=True)
+
+    # --- Analyse ---
+    window_sec = args.window_seconds
+    rms = compute_rms(samples, rate, window_sec)
+    db = rms_to_db(rms)
+
+    threshold_linear = 10 ** (args.threshold_db / 20.0)
+    min_song_windows = int((args.min_song_minutes * 60) / window_sec)
+    merge_gap_windows = int(args.merge_gap_seconds / window_sec)
+
+    print(
+        f"\nThreshold: {args.threshold_db} dBFS  |  "
+        f"Min song: {args.min_song_minutes} min  |  "
+        f"Merge gap: {args.merge_gap_seconds} s"
+    )
+    print(f"Recording loudness range: {db.min():.1f} to {db.max():.1f} dBFS\n")
+
+    songs = find_songs(rms, min_song_windows, merge_gap_windows, threshold_linear)
+
+    if not songs:
+        print("No songs detected. Try lowering --threshold-db.")
+        return
+
+    def to_frames(w: int) -> int:
+        return int(w * window_sec * rate)
+
+    print(f"Detected {len(songs)} song(s):")
+    for i, (w_start, w_end) in enumerate(songs, 1):
+        f_start = to_frames(w_start)
+        f_end = to_frames(w_end)
+        duration_sec = (f_end - f_start) / rate
+        start_min = f_start / rate / 60
+        peak_db = db[w_start:w_end].max()
+        print(
+            f"  Song {i:02d}: {start_min:5.1f} min  "
+            f"duration {duration_sec/60:.1f} min  "
+            f"peak {peak_db:.1f} dBFS"
+        )
+
+    if args.preview:
+        print("\n(--preview: no files written)")
+        return
+
+    os.makedirs(output_dir, exist_ok=True)
+    metadata = build_metadata(args.input, rate, info.channels, rms, window_sec, songs)
+    json_path = write_segments_json(output_dir, metadata)
+    print(f"\n  -> {json_path}  (segments)")
+
+    launch_server(output_dir, args.input, args.port)
+```
+
+Also add `import sys` back to the top of `split_songs.py` (needed by `launch_server` via `review_server` import chain — actually it's not needed directly, but keep imports clean). Actually `sys` is not needed; skip it.
+
+- [ ] **Step 6: Run tests — confirm all 14 pass**
+
+```bash
+python3 test_split_songs.py
+```
+
+Expected: all 14 tests PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add split_songs.py test_split_songs.py
+git commit -m "feat: add write_segments_json, launch_server, update main to start review server"
+```
+
+---
+
+### Task 3: Create `review_server.py` — Flask server with state and audio endpoints
+
+**Files:**
+- Create: `review_server.py`
+- Create: `test_review_server.py`
+- Modify: `requirements.txt`
+
+- [ ] **Step 1: Add Flask to requirements.txt**
+
+```
+numpy>=1.24
+soundfile>=0.12
+pytest>=7.0
+flask>=2.0
+```
+
+Install it:
+
+```bash
+pip3 install flask
+```
+
+- [ ] **Step 2: Write the failing tests**
+
+Create `test_review_server.py`:
+
+```python
+#!/usr/bin/env python3
+"""Tests for review_server.py"""
+import json
+import os
+import sys
+import tempfile
+
+import numpy as np
+import pytest
+import soundfile as sf
+
+sys.path.insert(0, ".")
+import review_server
+
+
+@pytest.fixture
+def server_env(tmp_path):
+    """Set up a temp output_dir with segments.json and a short WAV."""
+    # Write a 5-second stereo WAV
+    wav_path = str(tmp_path / "source.wav")
+    samples = (np.random.randn(48000 * 5, 2) * 0.1).astype(np.float32)
+    sf.write(wav_path, samples, 48000, subtype="FLOAT")
+
+    # Write a minimal segments.json
+    state = {
+        "source_file": wav_path,
+        "duration_min": 5 / 60,
+        "sample_rate": 48000,
+        "channels": 2,
+        "overview_rms": [0.1] * 2000,
+        "segments": [
+            {"id": 0, "name": "Song 01", "start_min": 0.0, "end_min": 5/60,
+             "color": "#4a9eff", "exported": False}
+        ],
+    }
+    json_path = str(tmp_path / "segments.json")
+    with open(json_path, "w") as f:
+        json.dump(state, f)
+
+    review_server.OUTPUT_DIR = str(tmp_path)
+    review_server.SOURCE_WAV = wav_path
+    return {"output_dir": str(tmp_path), "wav_path": wav_path, "state": state}
+
+
+@pytest.fixture
+def client(server_env):
+    review_server.app.config["TESTING"] = True
+    with review_server.app.test_client() as c:
+        yield c
+
+
+def test_get_state_returns_json(client, server_env):
+    resp = client.get("/state")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert data["source_file"] == server_env["wav_path"]
+    assert len(data["segments"]) == 1
+
+
+def test_put_state_writes_file(client, server_env):
+    new_state = server_env["state"].copy()
+    new_state["segments"][0]["name"] = "Renamed Song"
+    resp = client.put(
+        "/state",
+        data=json.dumps(new_state),
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    json_path = os.path.join(server_env["output_dir"], "segments.json")
+    with open(json_path) as f:
+        saved = json.load(f)
+    assert saved["segments"][0]["name"] == "Renamed Song"
+
+
+def test_audio_full_request_returns_200(client):
+    resp = client.get("/audio")
+    assert resp.status_code == 200
+    assert resp.content_type == "audio/wav"
+
+
+def test_audio_range_request_returns_206(client):
+    resp = client.get("/audio", headers={"Range": "bytes=0-1023"})
+    assert resp.status_code == 206
+    assert b"Content-Range" in resp.headers.get("Content-Range", "").encode() or \
+           resp.headers.get("Content-Range", "").startswith("bytes 0-1023/")
+    assert len(resp.data) == 1024
+```
+
+- [ ] **Step 3: Run tests — confirm they fail**
+
+```bash
+pytest test_review_server.py -v
+```
+
+Expected: all 4 tests FAIL with `ModuleNotFoundError: No module named 'review_server'`.
+
+- [ ] **Step 4: Create `review_server.py`**
+
+```python
+#!/usr/bin/env python3
+"""HTTP review server for rehearsal recordings.
+
+Usage (direct):
+    python3 review_server.py <output_dir> <source_wav> <port>
+
+Called programmatically from split_songs.py via review_server.run().
+"""
+
+import json
+import os
+import sys
+
+from flask import Flask, Response, jsonify, request, send_file
+
+app = Flask(__name__)
+
+OUTPUT_DIR: str = ""
+SOURCE_WAV: str = ""
+
+
+def _segments_path() -> str:
+    return os.path.join(OUTPUT_DIR, "segments.json")
+
+
+def _ui_path() -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "review_ui.html")
+
+
+@app.route("/")
+def index():
+    return send_file(_ui_path(), mimetype="text/html")
+
+
+@app.route("/state", methods=["GET"])
+def get_state():
+    with open(_segments_path(), encoding="utf-8") as f:
+        return Response(f.read(), mimetype="application/json")
+
+
+@app.route("/state", methods=["PUT"])
+def put_state():
+    data = request.get_json(force=True)
+    with open(_segments_path(), "w", encoding="utf-8") as f:
+        json.dump(data, f, separators=(",", ":"))
+    return jsonify({"ok": True})
+
+
+@app.route("/audio")
+def audio():
+    file_size = os.path.getsize(SOURCE_WAV)
+    range_header = request.headers.get("Range")
+
+    if not range_header:
+        response = send_file(SOURCE_WAV, mimetype="audio/wav")
+        response.headers["Accept-Ranges"] = "bytes"
+        return response
+
+    # Parse "bytes=start-end"
+    byte_range = range_header.replace("bytes=", "")
+    start_str, _, end_str = byte_range.partition("-")
+    start = int(start_str)
+    end = int(end_str) if end_str else file_size - 1
+    length = end - start + 1
+
+    with open(SOURCE_WAV, "rb") as f:
+        f.seek(start)
+        chunk = f.read(length)
+
+    return Response(
+        chunk,
+        status=206,
+        mimetype="audio/wav",
+        headers={
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(length),
+        },
+    )
+
+
+def run(output_dir: str, source_wav: str, port: int = 5123) -> None:
+    """Start the Flask server. Blocks until Ctrl+C."""
+    global OUTPUT_DIR, SOURCE_WAV
+    OUTPUT_DIR = output_dir
+    SOURCE_WAV = source_wav
+    print(f"Review server: http://localhost:{port}  (Ctrl+C to stop)")
+    app.run(host="127.0.0.1", port=port, debug=False, use_reloader=False)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 4:
+        print("Usage: review_server.py <output_dir> <source_wav> <port>")
+        sys.exit(1)
+    run(output_dir=sys.argv[1], source_wav=sys.argv[2], port=int(sys.argv[3]))
+```
+
+- [ ] **Step 5: Run tests — confirm all 4 pass**
+
+```bash
+pytest test_review_server.py -v
+```
+
+Expected: all 4 PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add review_server.py test_review_server.py requirements.txt
+git commit -m "feat: add review_server with state and audio streaming endpoints"
+```
+
+---
+
+### Task 4: Add export endpoint to `review_server.py`
+
+**Files:**
+- Modify: `review_server.py`
+- Modify: `test_review_server.py`
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `test_review_server.py`:
+
+```python
+def test_export_writes_wav_and_marks_exported(client, server_env):
+    resp = client.post(
+        "/export/song_01.wav",
+        data=json.dumps({"segment_id": 0, "start_min": 0.0, "end_min": 5 / 60}),
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert os.path.exists(result["path"])
+
+    # Verify exported flag was saved
+    json_path = os.path.join(server_env["output_dir"], "segments.json")
+    with open(json_path) as f:
+        saved = json.load(f)
+    assert saved["segments"][0]["exported"] is True
+
+    # Verify it's a valid WAV
+    import soundfile as sf
+    data, rate = sf.read(result["path"])
+    assert rate == 48000
+    assert len(data) > 0
+```
+
+- [ ] **Step 2: Run test — confirm it fails**
+
+```bash
+pytest test_review_server.py::test_export_writes_wav_and_marks_exported -v
+```
+
+Expected: FAIL with 404 (route not found).
+
+- [ ] **Step 3: Add the export endpoint to `review_server.py`**
+
+Add this import at the top of `review_server.py` (after the existing imports):
+
+```python
+import soundfile as sf
+```
+
+Add this route after the `audio()` function:
+
+```python
+@app.route("/export/<filename>", methods=["POST"])
+def export_segment(filename: str):
+    """Export one segment as a WAV file.
+
+    Body: {"segment_id": int, "start_min": float, "end_min": float}
+    Returns: {"path": str}
+    """
+    body = request.get_json(force=True)
+    start_min = float(body["start_min"])
+    end_min = float(body["end_min"])
+    segment_id = int(body["segment_id"])
+
+    samples, rate = sf.read(SOURCE_WAV, dtype="float32", always_2d=True)
+    start_frame = int(start_min * 60 * rate)
+    end_frame = min(len(samples), int(end_min * 60 * rate))
+    chunk = samples[start_frame:end_frame]
+
+    out_path = os.path.join(OUTPUT_DIR, filename)
+    sf.write(out_path, chunk, rate, subtype="FLOAT")
+
+    # Mark segment as exported in segments.json
+    with open(_segments_path(), encoding="utf-8") as f:
+        state = json.load(f)
+    for seg in state["segments"]:
+        if seg["id"] == segment_id:
+            seg["exported"] = True
+            break
+    with open(_segments_path(), "w", encoding="utf-8") as f:
+        json.dump(state, f, separators=(",", ":"))
+
+    return jsonify({"path": out_path})
+```
+
+- [ ] **Step 4: Run all server tests — confirm all 5 pass**
+
+```bash
+pytest test_review_server.py -v
+```
+
+Expected: all 5 PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add review_server.py test_review_server.py
+git commit -m "feat: add export endpoint to review_server"
+```
+
+---
+
+### Task 5: Create `review_ui.html` — complete interactive frontend
+
+This replaces the old `_HTML_TEMPLATE`. It loads state from `GET /state`, plays audio via `<audio src="/audio">`, persists every change with `PUT /state`, and exports via `POST /export/<filename>`.
+
+**Files:**
+- Create: `review_ui.html`
+
+- [ ] **Step 1: Create `review_ui.html`**
+
+```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -113,7 +819,7 @@ canvas{display:block}
   <div id="cardsContainer"></div>
 </div>
 
-<audio id="mainAudio" src="/audio" preload="metadata"></audio>
+<audio id="mainAudio" src="/audio" preload="auto"></audio>
 
 <script>
 // ── State ────────────────────────────────────────────────────
@@ -158,7 +864,7 @@ function saveState() {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(S),
-    }).catch(err => console.error('Save failed:', err));
+    });
   }, 200);
 }
 
@@ -296,11 +1002,11 @@ function buildCard(seg) {
   const card = document.createElement('div');
   card.className = 'song-card';
   card.id = `card${seg.id}`;
-  const exportLabel = seg.exported ? '✓ Exported' : '▼ Export MP3';
+  const exportLabel = seg.exported ? '✓ Exported' : '▼ Export WAV';
   card.innerHTML = `
     <div class="card-header">
       <div class="song-num" style="background:${seg.color}22;color:${seg.color}">${S.segments.indexOf(seg)+1}</div>
-      <input class="song-name" id="name${seg.id}" value="" />
+      <input class="song-name" id="name${seg.id}" value="${seg.name}" />
       <button class="btn-export${seg.exported?' exported':''}" id="export${seg.id}">${exportLabel}</button>
       <button class="btn-del" id="del${seg.id}">✕</button>
     </div>
@@ -362,7 +1068,6 @@ function buildCard(seg) {
       </div>
     </div>`;
 
-  card.querySelector(`#name${seg.id}`).value = seg.name;
   document.getElementById('cardsContainer').appendChild(card);
 
   // Focus on click
@@ -409,23 +1114,17 @@ function buildCard(seg) {
 
   // Export
   document.getElementById(`export${seg.id}`).addEventListener('click', () => {
-    const filename = (seg.name || `song_${String(seg.id + 1).padStart(2,'0')}`).replace(/[^a-zA-Z0-9_\-]/g, '_').replace(/_+/g, '_').replace(/^_|_$/, '') + '.mp3';
+    const filename = `song_${String(seg.id + 1).padStart(2,'0')}.wav`;
     fetch(`/export/${filename}`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({segment_id: seg.id, start_min: seg.start_min, end_min: seg.end_min}),
-    }).then(r => {
-      if (!r.ok) throw new Error(`Export failed: ${r.status}`);
-      return r.json();
-    }).then(() => {
+    }).then(r => r.json()).then(() => {
       seg.exported = true;
       const btn = document.getElementById(`export${seg.id}`);
       btn.textContent = '✓ Exported';
       btn.classList.add('exported');
       drawOverview();
-    }).catch(err => {
-      console.error('Export error:', err);
-      alert('Export failed. See console for details.');
     });
   });
 
@@ -495,7 +1194,6 @@ function refreshSeg(segId) {
   drawCtxCanvas(segId);
   updateHandles(segId);
   updateTimeInputs(segId);
-  drawMiniWave(segId);
   drawOverview();
 }
 
@@ -524,7 +1222,9 @@ function drawMiniWave(segId) {
   const i0 = Math.floor(minToFrac(seg.start_min) * S.overview_rms.length);
   const i1 = Math.floor(minToFrac(seg.end_min) * S.overview_rms.length);
   const slice = S.overview_rms.slice(i0, i1); if (!slice.length) return;
-  drawRMSBars(ctx, slice, W, H, seg.color + 'aa');
+  const peak = Math.max(...slice, 0.01);
+  const normed = slice.map(v => v / peak);
+  drawRMSBars(ctx, normed, W, H, seg.color + 'aa');
 }
 
 function updateHandles(segId) {
@@ -639,7 +1339,7 @@ function addSegment(startMin, endMin) {
     name: `Song ${String(nextId).padStart(2,'0')}`,
     start_min: Math.round(startMin * 3600) / 3600,
     end_min: Math.round(endMin * 3600) / 3600,
-    color: ['#4a9eff','#5abb6a','#e07840','#b06adb','#e0c040','#40b8c8','#e05070','#70c870','#c06030','#8080e0','#40c8a0'][S.segments.length % 11],
+    color: ['#4a9eff','#5abb6a','#e07840','#b06adb','#e0c040','#40b8c8','#e05070'][S.segments.length % 7],
     exported: false,
   };
   S.segments.push(seg);
@@ -671,3 +1371,105 @@ window.addEventListener('resize', () => {
 </script>
 </body>
 </html>
+```
+
+- [ ] **Step 2: Verify `review_ui.html` is served by the running server**
+
+With a `segments.json` present in an output directory, start the server manually to confirm the UI loads:
+
+```bash
+python3 review_server.py 260407_182931_TrLR_songs raw/260407_182931_TrLR.WAV 5123
+```
+
+Open http://localhost:5123 — confirm:
+- Header shows filename, duration, channel info
+- Overview waveform renders with segment bands
+- Cards render with drag handles, time inputs, ▲▼ steppers
+- Dragging handles and middle of segment box works, time inputs update live
+- Arrow keys nudge selected segment 1 second
+- Play button starts audio at segment start, seek bar updates
+- Export WAV button shows "✓ Exported" after click and server writes WAV
+- Delete on unexported segment removes card immediately
+- Delete on exported segment shows inline warning first
+- All changes persist to segments.json (check file after editing)
+
+Kill the server when done (Ctrl+C).
+
+- [ ] **Step 3: Run end-to-end via split_songs.py**
+
+```bash
+python3 split_songs.py raw/260407_182931_TrLR.WAV --reset
+```
+
+Expected:
+```
+Reading raw/260407_182931_TrLR.WAV ...
+  93.4 min  |  48000 Hz  2ch  WAV
+
+Threshold: -40.0 dBFS  |  Min song: 2.0 min  |  Merge gap: 20.0 s
+Recording loudness range: ...
+
+Detected 9 song(s):
+  Song 01: ...
+  ...
+
+  -> 260407_182931_TrLR_songs/segments.json  (segments)
+
+Review server: http://localhost:5123  (Ctrl+C to stop)
+```
+
+Browser should open automatically. Verify UI loads with 9 detected segments.
+
+Kill server, re-run without `--reset`:
+
+```bash
+python3 split_songs.py raw/260407_182931_TrLR.WAV
+```
+
+Expected: `Loading existing session from 260407_182931_TrLR_songs/segments.json` — skips detection, server starts immediately.
+
+- [ ] **Step 4: Run all tests**
+
+```bash
+python3 test_split_songs.py && pytest test_review_server.py -v
+```
+
+Expected: all 14 split_songs tests PASS, all 5 server tests PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add review_ui.html
+git commit -m "feat: add review_ui.html — interactive segment editor frontend"
+```
+
+---
+
+## Self-Review
+
+**Spec coverage:**
+- ✅ No auto-export — WAV export loop removed from `main()` — Task 2
+- ✅ `segments.json` written on first run — Task 2 `write_segments_json`
+- ✅ Session recovery: skip detection if `segments.json` exists — Task 2 `main()`
+- ✅ `--reset` flag to force re-detection — Task 2 `parse_args`
+- ✅ `GET /`, `GET /state`, `PUT /state`, `GET /audio`, `POST /export/<filename>` — Tasks 3–4
+- ✅ HTTP range request support for audio seeking — Task 3
+- ✅ Export marks `exported: true` in segments.json — Task 4
+- ✅ Overview strip updates live as segments are dragged — Task 5 `drawOverview` called in `refreshSeg`
+- ✅ Click+drag on overview to add segment — Task 5 `setupOverviewInteraction`
+- ✅ Drag handles to resize — Task 5 `setupDrags` (left/right mode)
+- ✅ Drag middle to move — Task 5 `setupDrags` (move mode)
+- ✅ ▲▼ stepper buttons, 1 second each, hold to repeat — Task 5 steppers with `setInterval`
+- ✅ Typed mm:ss inputs — Task 5 time input change handlers
+- ✅ ← → arrow key nudge (1s / Shift 10s) — Task 5 keydown handler
+- ✅ Autosave: every change calls `saveState()` — Task 5, all mutation handlers
+- ✅ Export button calls `POST /export/<filename>`, shows ✓ Exported — Task 5 export handler
+- ✅ Delete with no export: removes immediately — Task 5 `removeSegment`
+- ✅ Delete with exported file: inline warning — Task 5 delete handler
+- ✅ Plays from `/audio` (original file, no pre-exported WAV) — Task 5 `<audio src="/audio">`
+- ✅ Playhead and seek bar update during playback — Task 5 `timeupdate` handler
+- ✅ Seek via waveform click or seek bar click — Task 5 `seekSeg`
+
+**Placeholder scan:** None found. All steps have complete code.
+
+**Type consistency:** `seg.start_min` / `seg.end_min` (minutes, float) used consistently throughout Tasks 2–5. `minToFrac` / `fracToMin` conversions used only for canvas positioning. `STEP_MIN = 1/60` (1 second in minutes) used in arrow keys, steppers, and input validation.

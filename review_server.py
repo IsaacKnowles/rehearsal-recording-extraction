@@ -11,6 +11,8 @@ import json
 import os
 import sys
 
+import lameenc
+import numpy as np
 import soundfile as sf
 from flask import Flask, Response, jsonify, request, send_file
 
@@ -80,9 +82,24 @@ def audio():
     )
 
 
+def _encode_mp3(samples: np.ndarray, rate: int) -> bytes:
+    """Encode float32 stereo/mono samples to MP3 bytes using lameenc."""
+    encoder = lameenc.Encoder()
+    encoder.set_bit_rate(320)
+    encoder.set_in_sample_rate(rate)
+    encoder.set_channels(samples.shape[1] if samples.ndim > 1 else 1)
+    encoder.set_quality(2)  # 2 = high quality
+
+    pcm = (samples * 32767).clip(-32768, 32767).astype(np.int16)
+    if pcm.ndim > 1:
+        # lameenc expects interleaved samples
+        pcm = pcm.flatten()
+    return encoder.encode(pcm.tobytes()) + encoder.flush()
+
+
 @app.route("/export/<filename>", methods=["POST"])
 def export_segment(filename: str):
-    """Export one segment as a WAV file.
+    """Export one segment as an MP3 file.
 
     Body: {"segment_id": int, "start_min": float, "end_min": float}
     Returns: {"path": str}
@@ -97,9 +114,11 @@ def export_segment(filename: str):
     end_frame = min(len(samples), int(end_min * 60 * rate))
     chunk = samples[start_frame:end_frame]
 
-    safe_name = os.path.basename(filename)
+    safe_name = os.path.splitext(os.path.basename(filename))[0] + ".mp3"
     out_path = os.path.join(OUTPUT_DIR, safe_name)
-    sf.write(out_path, chunk, rate, subtype="FLOAT")
+    mp3_bytes = _encode_mp3(chunk, rate)
+    with open(out_path, "wb") as f:
+        f.write(mp3_bytes)
 
     # Mark segment as exported in segments.json
     with open(_segments_path(), encoding="utf-8") as f:

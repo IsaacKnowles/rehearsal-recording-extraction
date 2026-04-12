@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Detect songs in a rehearsal WAV and launch the interactive review server.
+"""Analyse a rehearsal WAV and launch the interactive review server.
 
-Analyses the recording for loud segments, writes segments.json, then starts
-a local Flask server for editing and exporting individual songs.
+Reads the recording, computes the RMS waveform, writes segments.json with an
+empty segments list, then starts a local Flask server for creating, editing,
+and exporting individual songs.
 
 Usage:
     python3 split_songs.py raw/recording.WAV
-    python3 split_songs.py raw/recording.WAV -o songs/ --preview
+    python3 split_songs.py raw/recording.WAV -o songs/
     python3 split_songs.py raw/recording.WAV --reset
 """
 
@@ -25,7 +26,7 @@ COLORS: list[str] = [
 
 
 def compute_rms(samples: np.ndarray, rate: int, window_sec: float = 1.0) -> np.ndarray:
-    """Compute per-window RMS amplitude.
+    """Compute per-window peak amplitude.
 
     Args:
         samples: shape (n_frames, n_channels), float32 or float64
@@ -33,15 +34,15 @@ def compute_rms(samples: np.ndarray, rate: int, window_sec: float = 1.0) -> np.n
         window_sec: window size in seconds
 
     Returns:
-        1-D array of RMS values, one per complete window
+        1-D array of peak absolute values, one per complete window.
+        Values are in 0–1.0 for float32 audio (matching the native sample range).
     """
     window_frames = int(rate * window_sec)
     mono = samples.mean(axis=1)  # mix to mono for analysis
     n_windows = len(mono) // window_frames
-    # Reshape into (n_windows, window_frames) for fast vectorised RMS
+    # Reshape into (n_windows, window_frames) for fast vectorised peak
     trimmed = mono[: n_windows * window_frames].reshape(n_windows, window_frames)
-    rms = np.sqrt(np.mean(trimmed.astype(np.float64) ** 2, axis=1))
-    return rms
+    return np.max(np.abs(trimmed.astype(np.float64)), axis=1)
 
 
 def find_songs(
@@ -92,16 +93,11 @@ def find_songs(
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Split rehearsal recording into songs.")
+    p = argparse.ArgumentParser(description="Analyse a rehearsal recording and launch the interactive review server.")
     p.add_argument("input", help="Path to input WAV file")
     p.add_argument("-o", "--output-dir", default=None, help="Output directory (default: <stem>_songs/)")
-    p.add_argument("--threshold-db", type=float, default=-40.0, help="Loud/quiet threshold in dBFS (default: -40)")
-    p.add_argument("--min-song-minutes", type=float, default=2.0, help="Minimum song duration in minutes (default: 2)")
-    p.add_argument("--merge-gap-seconds", type=float, default=20.0, help="Merge segments closer than this (default: 20s)")
-    p.add_argument("--window-seconds", type=float, default=1.0, help="RMS window size in seconds (default: 1.0)")
     p.add_argument("--port", type=int, default=5123, help="Review server port (default: 5123)")
-    p.add_argument("--preview", action="store_true", help="Print detected songs without writing files or starting server")
-    p.add_argument("--reset", action="store_true", help="Re-run detection even if segments.json already exists")
+    p.add_argument("--reset", action="store_true", help="Re-analyse recording even if segments.json already exists")
     return p.parse_args()
 
 
@@ -120,13 +116,10 @@ def downsample_rms(
     (zero-padded if the input is shorter).
     """
     arr = rms.astype(np.float64)
-    if len(arr) >= n_points:
-        # Trim to a multiple of n_points, reshape, take column means
-        trimmed = arr[: n_points * (len(arr) // n_points)]
-        arr = trimmed.reshape(n_points, -1).mean(axis=1)
-    # Zero-pad if shorter than requested
-    if len(arr) < n_points:
-        arr = np.pad(arr, (0, n_points - len(arr)))
+    if len(arr) != n_points:
+        x_in = np.linspace(0, 1, len(arr))
+        x_out = np.linspace(0, 1, n_points)
+        arr = np.interp(x_out, x_in, arr)
     if normalize and len(arr) > 0:
         peak = arr.max()
         if peak > 0:
@@ -174,7 +167,7 @@ def build_metadata(
         "duration_min": round(duration_min, 2),
         "sample_rate": rate,
         "channels": channels,
-        "overview_rms": downsample_rms(rms, 2000, normalize=True),
+        "overview_rms": downsample_rms(rms, 2000, normalize=False),
         "segments": segment_list,
     }
 
@@ -203,10 +196,10 @@ def main(args: argparse.Namespace) -> None:
     output_dir = args.output_dir or f"{stem}_songs"
     segments_json = os.path.join(output_dir, "segments.json")
 
-    # Session recovery: skip detection if segments.json already exists
+    # Session recovery: reuse existing segments.json unless --reset is passed
     if os.path.exists(segments_json) and not args.reset:
         print(f"Loading existing session from {segments_json}")
-        print("  (pass --reset to re-run detection)")
+        print("  (pass --reset to re-analyse recording)")
         launch_server(output_dir, args.input, args.port)
         return
 
@@ -220,49 +213,11 @@ def main(args: argparse.Namespace) -> None:
     samples, rate = sf.read(args.input, dtype="float32", always_2d=True)
 
     # --- Analyse ---
-    window_sec = args.window_seconds
+    window_sec = 1.0
     rms = compute_rms(samples, rate, window_sec)
-    db = rms_to_db(rms)
-
-    threshold_linear = 10 ** (args.threshold_db / 20.0)
-    min_song_windows = int((args.min_song_minutes * 60) / window_sec)
-    merge_gap_windows = int(args.merge_gap_seconds / window_sec)
-
-    print(
-        f"\nThreshold: {args.threshold_db} dBFS  |  "
-        f"Min song: {args.min_song_minutes} min  |  "
-        f"Merge gap: {args.merge_gap_seconds} s"
-    )
-    print(f"Recording loudness range: {db.min():.1f} to {db.max():.1f} dBFS\n")
-
-    songs = find_songs(rms, min_song_windows, merge_gap_windows, threshold_linear)
-
-    if not songs:
-        print("No songs detected. Try lowering --threshold-db.")
-        return
-
-    def to_frames(w: int) -> int:
-        return int(w * window_sec * rate)
-
-    print(f"Detected {len(songs)} song(s):")
-    for i, (w_start, w_end) in enumerate(songs, 1):
-        f_start = to_frames(w_start)
-        f_end = to_frames(w_end)
-        duration_sec = (f_end - f_start) / rate
-        start_min = f_start / rate / 60
-        peak_db = db[w_start:w_end].max()
-        print(
-            f"  Song {i:02d}: {start_min:5.1f} min  "
-            f"duration {duration_sec/60:.1f} min  "
-            f"peak {peak_db:.1f} dBFS"
-        )
-
-    if args.preview:
-        print("\n(--preview: no files written)")
-        return
 
     os.makedirs(output_dir, exist_ok=True)
-    metadata = build_metadata(args.input, rate, info.channels, rms, window_sec, songs)
+    metadata = build_metadata(args.input, rate, info.channels, rms, window_sec, [])
     json_path = write_segments_json(output_dir, metadata)
     print(f"\n  -> {json_path}  (segments)")
 

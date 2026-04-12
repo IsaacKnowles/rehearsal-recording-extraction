@@ -84,14 +84,15 @@ def test_audio_range_request_returns_206(client):
     assert len(resp.data) == 1024
 
 
-def test_export_writes_wav_and_marks_exported(client, server_env):
+def test_export_writes_mp3_and_marks_exported(client, server_env):
     resp = client.post(
-        "/export/song_01.wav",
+        "/export/song_01.mp3",
         data=json.dumps({"segment_id": 0, "start_min": 0.0, "end_min": 5 / 60}),
         content_type="application/json",
     )
     assert resp.status_code == 200
     result = json.loads(resp.data)
+    assert result["path"].endswith(".mp3")
     assert os.path.exists(result["path"])
 
     # Verify exported flag was saved
@@ -100,7 +101,5 @@ def test_export_writes_wav_and_marks_exported(client, server_env):
         saved = json.load(f)
     assert saved["segments"][0]["exported"] is True
 
-    # Verify it's a valid WAV
-    data, rate = sf.read(result["path"])
-    assert rate == 48000
-    assert len(data) > 0
+    # Verify it's a non-empty MP3
+    assert os.path.getsize(result["path"]) > 1000
