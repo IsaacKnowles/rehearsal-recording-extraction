@@ -124,6 +124,9 @@ let playingId = null;
 let saveTimer = null;
 const audio = document.getElementById('mainAudio');
 
+// ── Heartbeat ────────────────────────────────────────────────
+setInterval(() => fetch('/ping', {method:'POST'}), 5000);
+
 // ── Boot ─────────────────────────────────────────────────────
 fetch('/state').then(r => r.json()).then(state => {
   S = state;

@@ -4,3 +4,7 @@ venv/
 __pycache__/
 *.pyc
 .DS_Store
+.superpowers/
+*.wav
+*.mp3
+*.WAV

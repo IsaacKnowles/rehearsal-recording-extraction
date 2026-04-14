@@ -10,6 +10,8 @@ Called programmatically from split_songs.py via review_server.run().
 import json
 import os
 import sys
+import threading
+import time
 
 import lameenc
 import numpy as np
@@ -21,6 +23,18 @@ app = Flask(__name__)
 OUTPUT_DIR: str = ""
 SOURCE_WAV: str = ""
 
+_HEARTBEAT_TIMEOUT = 15  # seconds — shut down if no ping received
+_last_ping: float = 0.0
+
+
+def _heartbeat_watchdog() -> None:
+    """Background thread: exit if the browser stops sending pings."""
+    while True:
+        time.sleep(5)
+        if _last_ping > 0 and time.time() - _last_ping > _HEARTBEAT_TIMEOUT:
+            print("\nBrowser disconnected — shutting down.")
+            os._exit(0)
+
 
 def _segments_path() -> str:
     return os.path.join(OUTPUT_DIR, "segments.json")
@@ -28,6 +42,13 @@ def _segments_path() -> str:
 
 def _ui_path() -> str:
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "review_ui.html")
+
+
+@app.route("/ping", methods=["POST"])
+def ping():
+    global _last_ping
+    _last_ping = time.time()
+    return jsonify({"ok": True})
 
 
 @app.route("/")
@@ -134,10 +155,12 @@ def export_segment(filename: str):
 
 
 def run(output_dir: str, source_wav: str, port: int = 5123) -> None:
-    """Start the Flask server. Blocks until Ctrl+C."""
+    """Start the Flask server. Blocks until Ctrl+C or browser closes."""
     global OUTPUT_DIR, SOURCE_WAV
     OUTPUT_DIR = output_dir
     SOURCE_WAV = source_wav
+    t = threading.Thread(target=_heartbeat_watchdog, daemon=True)
+    t.start()
     print(f"Review server: http://localhost:{port}  (Ctrl+C to stop)")
     app.run(host="127.0.0.1", port=port, debug=False, use_reloader=False)
 
